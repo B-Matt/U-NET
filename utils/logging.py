@@ -1,5 +1,4 @@
 import logging
-import logging.handlers
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
