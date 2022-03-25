@@ -58,11 +58,11 @@ class Dataset(Dataset):
         temp_img = temp_img.to(torch.float32)
         temp_img = temp_img.permute(2, 0, 1)
         temp_img = temp_img[0:3]
-        #temp_img /= 255.0
+        temp_img /= 255.0
 
         temp_mask = torch.from_numpy(mask)
         temp_mask = temp_mask.to(torch.float32)
-        #temp_mask /= 255.0
+        temp_mask /= 255.0
         temp_mask = temp_mask.unsqueeze(0)
         temp_mask = (temp_mask > 0.5).float()
 

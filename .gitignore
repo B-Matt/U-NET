@@ -131,3 +131,6 @@ dmypy.json
 # Custom
 data/*
 cache/*
+module_tests.py
+
+train.py

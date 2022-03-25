@@ -3,11 +3,9 @@
     GitHub repo: https://github.com/fhrzic/U-Net/blob/main/scripts/utils/disk.py
 """
 
-import ast
 import zlib
 import diskcache
 import pickle
-from io import BytesIO
 
 # Constants
 CACHE_DIRECTORY = 'cache/'
