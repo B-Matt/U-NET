@@ -3,9 +3,10 @@
     GitHub repo: https://github.com/fhrzic/U-Net/blob/main/scripts/utils/disk.py
 """
 
+import ast
 import zlib
 import diskcache
-from diskcache.core import io
+import pickle
 from io import BytesIO
 
 # Constants
@@ -36,11 +37,8 @@ class DeflatedDisk(diskcache.Disk):
             value = value.read()
             read = False
 
-        print('cache1', value[0])
-        print('cache2', value[0])
-        print('\n')
-        bytes_value = BytesIO(value)
-        value = zlib.compress(bytes_value.getvalue(), zlib.Z_BEST_COMPRESSION)
+        value = pickle.dumps(value)
+        value = zlib.compress(value, zlib.Z_BEST_SPEED)
         return super(DeflatedDisk, self).store(value, read)
 
     def fetch(self, mode, filename, value, read):
@@ -55,10 +53,9 @@ class DeflatedDisk(diskcache.Disk):
         """
         value = super(DeflatedDisk, self).fetch(mode, filename, value, read)
         if not read:
-            bytes_value = BytesIO(value)
-            value = zlib.decompress(bytes_value.getvalue())
+            value = zlib.decompress(value)
+            value = pickle.loads(value)
 
-        print('aa', value)
         return value
 
 def getCache(scope_str):

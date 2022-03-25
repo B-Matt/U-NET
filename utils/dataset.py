@@ -12,7 +12,6 @@ from utils.image_data import ImageData, data_info_tuple
 # Cache
 cache = getCache('DataCache')
 
-
 # Classes
 class DatasetType(enum.Enum):
     TRAIN = 'training'
@@ -36,7 +35,6 @@ class Dataset(Dataset):
                     pathlib.Path(path, 'Mask')
                 )
                 dataset_files.append(data_info)
-                break
         return dataset_files
 
     @functools.lru_cache(maxsize=1, typed=True)
@@ -44,7 +42,8 @@ class Dataset(Dataset):
         return ImageData(data_info, is_combined, patch_size)
 
     @cache.memoize(typed=True)
-    def load_sample(self, image_data: ImageData):
+    def load_sample(self, image_data_tuple):
+        image_data: ImageData = self.get_data_object(image_data_tuple, self.is_combined_data, self.patch_size)
         img, mask = image_data.get_sample()
         return img, mask
 
@@ -53,8 +52,7 @@ class Dataset(Dataset):
 
     def __getitem__(self, index: Any):
         image_data_tuple = self.images_data[index]
-        image_data = self.get_data_object(image_data_tuple, self.is_combined_data, self.patch_size)
-        img, mask = self.load_sample(image_data)
+        img, mask = self.load_sample(image_data_tuple)
 
         temp_img = torch.from_numpy(img)
         temp_img = temp_img.to(torch.float32)
