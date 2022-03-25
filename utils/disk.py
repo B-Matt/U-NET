@@ -1,8 +1,3 @@
-"""
-    Improved clever Disk cache method from Franko Hržić with implementing zlib compression instead of gzip.
-    GitHub repo: https://github.com/fhrzic/U-Net/blob/main/scripts/utils/disk.py
-"""
-
 import zlib
 import diskcache
 import pickle
@@ -19,16 +14,15 @@ log.setLevel(logging.INFO)
 # Caching
 class DeflatedDisk(diskcache.Disk):
     """
-    Overrides diskcache Disk class with implementation of zlib library for compression.
+        Overrides diskcache Disk class with implementation of zlib library for compression.
     """
     def store(self, value, read, key=None):
         """
-        Override from base class diskcache.Disk.
-        Chunking is due to needing to work on pythons < 2.7.13:
-        
-        :param value: value to convert
-        :param bool read: True when value is file-like object
-        :return: (size, mode, filename, value) tuple for Cache table
+            Override from base class diskcache.Disk.
+            
+            :param value: value to convert
+            :param bool read: True when value is file-like object
+            :return: (size, mode, filename, value) tuple for Cache table
         """
         
         if read is True:
@@ -41,13 +35,13 @@ class DeflatedDisk(diskcache.Disk):
 
     def fetch(self, mode, filename, value, read):
         """
-        Override from base class diskcache.Disk.
+            Override from base class diskcache.Disk.
 
-        :param int mode: value mode raw, binary, text, or pickle
-        :param str filename: filename of corresponding value
-        :param value: database value
-        :param bool read: when True, return an open file handle
-        :return: corresponding Python value
+            :param int mode: value mode raw, binary, text, or pickle
+            :param str filename: filename of corresponding value
+            :param value: database value
+            :param bool read: when True, return an open file handle
+            :return: corresponding Python value
         """
         value = super(DeflatedDisk, self).fetch(mode, filename, value, read)
         if not read:

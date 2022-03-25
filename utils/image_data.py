@@ -1,13 +1,17 @@
 import os
-from pathlib import Path
 import sys
+import numpy as np
 
 from PIL import Image
-from scipy import ndimage
+from pathlib import Path
 from collections import namedtuple
 from skimage.transform import resize
 
-import numpy as np
+from utils.logging import logging
+
+# Logging
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)   
 
 data_info_tuple = namedtuple(
     'data_info_tuple',
@@ -15,12 +19,23 @@ data_info_tuple = namedtuple(
 )
 
 class ImageData:
+    """
+        Class that loads image and mask (used for disk caching).
+    """
     def __init__(self, info: data_info_tuple, is_combined: bool, patch_size: int = 256) -> None:
         self.info = info
         self.is_combined = is_combined
         self.patch_size = patch_size
         
         self.input_image = np.array(Image.open(Path(info.image, self._get_file_from_dir(info.image))))
+
+        if not self.is_combined:
+            try: 
+                raise ValueError    
+            except ValueError: 
+                log.error("Combination of multiple masks currently not implement!")   
+                sys.exit(1)  
+    
         self.input_mask = np.array(Image.open(Path(info.mask, self._get_file_from_dir(info.mask))).convert('L'), dtype=np.float32)
 
     def _get_file_from_dir(self, dir):
@@ -70,7 +85,6 @@ class ImageData:
         # Croping Variables
         crop_height = self.input_image.shape[0]
         crop_width = self.input_image.shape[1]
-        crop_pos_x, crop_pos_y = ndimage.center_of_mass(self.input_image)
 
         # Recalculate crop positions based on patch_size
         if crop_pos_x - patch_size < 0:
@@ -94,7 +108,7 @@ class ImageData:
             crop_pos_y - patch_size:crop_pos_y + patch_size,
             crop_pos_x - patch_size:crop_pos_x + patch_size
         ]
-       
+
         return img, mask
 
     def get_sample(self):
