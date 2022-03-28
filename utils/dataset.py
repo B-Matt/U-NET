@@ -23,6 +23,7 @@ class Dataset(Dataset):
         self.images_data = self.preload_image_data(data_dir, img_dir, type)
         self.is_combined_data = is_combined_data
         self.patch_size = patch_size
+        self.transform = transform
 
     @functools.lru_cache(1)
     def preload_image_data(self, data_dir: string, img_dir: string, type: DatasetType):
@@ -54,15 +55,17 @@ class Dataset(Dataset):
         image_data_tuple = self.images_data[index]
         img, mask = self.load_sample(image_data_tuple)
 
-        temp_img = torch.from_numpy(img)
-        temp_img = temp_img.to(torch.float32)
-        temp_img = temp_img.permute(2, 0, 1)
-        temp_img = temp_img[0:3]
-        temp_img /= 255.0
-
-        temp_mask = torch.from_numpy(mask)
+        if self.transform is not None:
+            augmentation = self.transform(image=img, mask=mask)
+            temp_img = augmentation['image']
+            temp_mask = augmentation['mask']
+        else:
+            temp_img = torch.from_numpy(img)
+            temp_mask = torch.from_numpy(mask)
+        
+        temp_img *= 255.0
+        
         temp_mask = temp_mask.to(torch.float32)
-        temp_mask /= 255.0
         temp_mask = temp_mask.unsqueeze(0)
         temp_mask = (temp_mask > 0.5).float()
 

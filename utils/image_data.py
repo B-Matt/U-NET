@@ -70,7 +70,7 @@ class ImageData:
         # Resizing
         img = resize(img, (self.patch_size, self.patch_size))
         mask = resize(mask, (self.patch_size, self.patch_size))
-        return img, mask
+        return img.astype('float32'), mask.astype('float32')
 
     def get_patch_image(self):
         """
