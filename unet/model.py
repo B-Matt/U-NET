@@ -1,0 +1,35 @@
+from architecture import *
+
+class UNet(nn.Module):
+    def __init__(self, n_channels, n_classes, bilinear=False) -> None:
+        super(UNet, self).__init__()
+
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+        self.bilinear = bilinear
+
+        self.in_conv = DoubleConv(n_channels, 64)
+        self.down_conv_1 = DownConv(64, 128)
+        self.down_conv_2 = DownConv(128, 256)
+        self.down_conv_3 = DownConv(256, 512)
+        factor = 2 if bilinear else 1
+        self.down_conv_4 = DownConv(512, 1024 // factor)
+
+        self.up_conv_1 = UpConv(1024, 512 // factor, bilinear)
+        self.up_conv_2 = UpConv(512, 256 // factor, bilinear)
+        self.up_conv_3 = UpConv(256, 128 // factor, bilinear)
+        self.up_conv_4 = UpConv(128, 64 // factor, bilinear)
+        self.out_conv = OutConv(64, n_classes)
+
+    def forward(self, x):
+        x1 = self.in_conv(x)
+        x2 = self.down_conv_1(x1)
+        x3 = self.down_conv_2(x2)
+        x4 = self.down_conv_3(x3)
+        x5 = self.down_conv_4(x4)
+
+        x = self.up_conv_1(x5, x4)
+        x = self.up_conv_2(x, x3)
+        x = self.up_conv_3(x, x2)
+        x = self.up_conv_4(x, x1)
+        return self.out_conv(x)
