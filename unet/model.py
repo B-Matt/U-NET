@@ -20,6 +20,7 @@ class UNet(nn.Module):
         self.up_conv_3 = UpConv(256, 128 // factor, bilinear)
         self.up_conv_4 = UpConv(128, 64 // factor, bilinear)
         self.out_conv = OutConv(64, n_classes)
+        self.last_activation = nn.Sigmoid()
 
     def forward(self, x):
         x1 = self.in_conv(x)
@@ -32,4 +33,5 @@ class UNet(nn.Module):
         x = self.up_conv_2(x, x3)
         x = self.up_conv_3(x, x2)
         x = self.up_conv_4(x, x1)
-        return self.out_conv(x)
+        x = self.out_conv(x)
+        return self.last_activation(x)
