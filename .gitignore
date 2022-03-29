@@ -132,5 +132,3 @@ dmypy.json
 data/*
 cache/*
 module_tests.py
-
-train.py

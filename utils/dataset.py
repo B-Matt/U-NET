@@ -62,11 +62,5 @@ class Dataset(Dataset):
         else:
             temp_img = torch.from_numpy(img)
             temp_mask = torch.from_numpy(mask)
-        
-        temp_img *= 255.0
-        
-        temp_mask = temp_mask.to(torch.float32)
-        temp_mask = temp_mask.unsqueeze(0)
-        temp_mask = (temp_mask > 0.5).float()
 
-        return (temp_img, temp_mask, image_data_tuple)
+        return (temp_img, temp_mask)
