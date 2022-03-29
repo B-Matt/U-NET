@@ -1,17 +1,14 @@
 from architecture import *
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False) -> None:
+    def __init__(self, n_channels, n_classes, bilinear=False):
         super(UNet, self).__init__()
-
-        self.n_channels = n_channels
-        self.n_classes = n_classes
-        self.bilinear = bilinear
 
         self.in_conv = DoubleConv(n_channels, 64)
         self.down_conv_1 = DownConv(64, 128)
         self.down_conv_2 = DownConv(128, 256)
         self.down_conv_3 = DownConv(256, 512)
+
         factor = 2 if bilinear else 1
         self.down_conv_4 = DownConv(512, 1024 // factor)
 
@@ -35,3 +32,14 @@ class UNet(nn.Module):
         x = self.up_conv_4(x, x1)
         x = self.out_conv(x)
         return self.last_activation(x)
+
+def test():
+    x = torch.randn((3, 1, 160, 160))
+    model = UNet(1, 1, False)
+    preds = model(x)
+
+    print(preds.shape, x.shape)
+    assert preds.shape == x.shape
+
+if __name__ == "__main__":
+    test()

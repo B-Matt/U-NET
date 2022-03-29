@@ -8,7 +8,7 @@ class DoubleConv(nn.Module):
         Class that creates double convolution used inside U-Net architecture.
         (conv -> BN -> ReLU) * 2
     """
-    def __init__(self, in_channels, out_channels, padding=0):
+    def __init__(self, in_channels, out_channels, padding=1):
         super().__init__()
 
         self.double_conv = nn.Sequential(
@@ -32,7 +32,7 @@ class DownConv(nn.Module):
 
         self.max_pool = nn.Sequential(
             nn.MaxPool2d(2),
-            DoubleConv(in_channels=in_channels, out_channels=out_channels)
+            DoubleConv(in_channels, out_channels)
         )
 
     def forward(self, x):
@@ -54,15 +54,15 @@ class UpConv(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
-
+        
+        print('sizes',x1.size(),x2.size(),diffX // 2, diffX - diffX//2, diffY // 2, diffY - diffY//2)
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
-        
         x = torch.cat([x2, x1], dim=1)
-        return self.conv(x)
+        x = self.conv(x)
+        return x
 
 class OutConv(nn.Module):
     """
