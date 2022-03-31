@@ -29,8 +29,8 @@ class DeflatedDisk(diskcache.Disk):
             value = value.read()
             read = False
 
-        value = pickle.dumps(value)
-        value = zlib.compress(value, zlib.Z_BEST_SPEED)
+        value = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+        value = zlib.compress(value, zlib.Z_BEST_COMPRESSION)
         return super(DeflatedDisk, self).store(value, read)
 
     def fetch(self, mode, filename, value, read):
@@ -56,5 +56,6 @@ def getCache(scope_str):
         disk=DeflatedDisk,
         shards=100,
         timeout=1,
-        size_limit=3e11
+        size_limit=50 * (2 ** 30),
+        sqlite_mmap_size=2 ** 28,
     )

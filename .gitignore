@@ -131,4 +131,6 @@ dmypy.json
 # Custom
 data/*
 cache/*
+wandb/*
+checkpoints/*
 module_tests.py

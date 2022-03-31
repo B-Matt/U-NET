@@ -20,7 +20,6 @@ def dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, 
     -------
     dice_score : Float
     """
-    print(input.dtype, input)
     if input.dim() == 2 and reduce_batch_first:
         raise ValueError(f'Dice: asked to reduce batch but got tensor without batch dimension (shape {input.shape})')
 

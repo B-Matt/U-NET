@@ -29,13 +29,14 @@ class Dataset(Dataset):
     def preload_image_data(self, data_dir: string, img_dir: string, type: DatasetType):
         dataset_files: List = []
         with open(pathlib.Path(data_dir, f'{type.value}.txt'), mode='r', encoding='utf-8') as file:
-            for line in file:
+            for i, line in enumerate(file):
                 path = pathlib.Path(data_dir, img_dir, line.strip())
                 data_info = data_info_tuple(
                     pathlib.Path(path, 'Image'),
                     pathlib.Path(path, 'Mask')
                 )
                 dataset_files.append(data_info)
+
         return dataset_files
 
     @functools.lru_cache(maxsize=1, typed=True)
@@ -59,8 +60,11 @@ class Dataset(Dataset):
             augmentation = self.transform(image=img, mask=mask)
             temp_img = augmentation['image']
             temp_mask = augmentation['mask']
-        else:
-            temp_img = torch.from_numpy(img)
-            temp_mask = torch.from_numpy(mask)
 
-        return (temp_img, temp_mask)
+        temp_mask = temp_mask.unsqueeze(0)
+        temp_mask = (temp_mask > 0.5).float()
+
+        return {
+            'image': torch.as_tensor(temp_img).float().contiguous(),
+            'mask': torch.as_tensor(temp_mask).float().contiguous()
+        }
