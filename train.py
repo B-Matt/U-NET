@@ -1,4 +1,5 @@
 import datetime
+from sklearn.metrics import jaccard_score
 import wandb
 import sys
 import torch
@@ -17,23 +18,24 @@ from utils.dataset import Dataset, DatasetType
 
 # Logging
 from utils.logging import logging
+from utils.metrics import BinaryMetrics, SegmentationMetrics
 
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
 
-torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = False
 
 # Hyperparameters etc.
 LEARNING_RATE = 1e-4
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 BATCH_SIZE = 10
-NUM_EPOCHS = 50
+NUM_EPOCHS = 250
 NUM_WORKERS = 4
 PATCH_SIZE = 512
 PIN_MEMORY = True
 LOAD_MODEL = True
-VALID_EVAL_STEP = 10
+VALID_EVAL_STEP = 3
 SAVING_CHECKPOINT = True
 USING_AMP = True
 
@@ -53,13 +55,14 @@ class UnetTraining:
         self.patch_size = patch_size
 
         self.device = device
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=1e-4)
 
         self.get_augmentations()
         self.get_loaders()
 
         if load_model:
             self.load_checkpoint(Path('checkpoints'))
+            self.model.to(self.device, non_blocking=True)
 
     def get_augmentations(self):
         self.train_transforms = A.Compose(
@@ -101,6 +104,7 @@ class UnetTraining:
         self.train_dataset = Dataset(data_dir = r'data', img_dir = r'imgs', type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
         self.train_loader = DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=True)
 
+        
         self.val_dataset = Dataset(data_dir = r'data', img_dir = r'imgs', type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
         self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
 
@@ -136,7 +140,6 @@ class UnetTraining:
         assert path.is_file()
 
         state_dict = torch.load(path)
-        print(state_dict)
         self.model.load_state_dict(state_dict['model_state'])
         self.optimizer.load_state_dict(state_dict['optimizer_state'])
         self.optimizer.name = state_dict['optimizer_name']
@@ -154,15 +157,16 @@ class UnetTraining:
             Mixed Precision: {self.using_amp}
         ''')
 
-        training = wandb.init(project="firebot-unet", resume='allow')
+        training = wandb.init(project='firebot-unet', resume='allow', entity='firebot031')
         training.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate, save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
         wandb.watch(self.model)
 
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'max', patience=2)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=15, factor=0.5)
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
         criterion = torch.nn.BCEWithLogitsLoss()
-        global_step = 0
+        metric_calculator = BinaryMetrics()
 
+        global_step = 0
         last_best_score = 0
         last_best_epoch = 0
 
@@ -174,10 +178,12 @@ class UnetTraining:
             for batch in self.train_loader:
                 batch_image = batch['image'].to(self.device, non_blocking=True, dtype=torch.float32)
                 batch_mask = batch['mask'].to(self.device, non_blocking=True, dtype=torch.float32)
+                pixel_accuracy, dice_score, precision, specificity, recall, jaccard_score = 0
 
                 with torch.cuda.amp.autocast(enabled=self.using_amp):
                     masks_pred = self.model(batch_image)
-                    loss = criterion(masks_pred, batch_mask) + dice_loss(F.softmax(masks_pred, dim=1).float(), batch_mask, multiclass=False)
+                    pixel_accuracy, dice_score, precision, specificity, recall, jaccard_score = metric_calculator(batch_mask, masks_pred)
+                    loss = criterion(masks_pred, batch_mask) + dice_score
 
                 self.optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -186,14 +192,19 @@ class UnetTraining:
 
                 progress_bar.update(batch_image.shape[0])
                 global_step += 1
-                epoch_loss += loss.item()
+                epoch_loss += loss.item()                
 
                 training.log({
                     'train loss': loss.item(),
                     'step': global_step,
-                    'epoch': epoch
+                    'epoch': epoch,
+                    'Pixel Accuracy (training)': pixel_accuracy,
+                    'IoU Score (training)': jaccard_score,
+                    'Dice Score (training)': dice_score,
+                    'Recalls (training)': recall,
                 })
-                progress_bar.set_postfix(**{'loss (batch)': loss.item()})
+
+                progress_bar.set_postfix(**{'Loss': loss.item(), 'Dice Score': dice_score.item(), 'Pixel Accuracy': pixel_accuracy.item(), 'Precision': precision.item(), 'Recall': recall.item() })
 
                 # Evaluation
                 eval_step = (int(len(self.train_dataset)) // (self.valid_eval_step * self.batch_size))
@@ -205,7 +216,7 @@ class UnetTraining:
                             histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
                             histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
 
-                        val_score = evaluate(self.model, self.val_loader, self.device)
+                        val_score = evaluate(self.model, self.val_loader, self.device, training)
                         scheduler.step(val_score)
                         masks_pred = (masks_pred > 0.5).float()
 
@@ -213,12 +224,17 @@ class UnetTraining:
                         training.log({
                             'learning rate': self.optimizer.param_groups[0]['lr'],
                             'evaluation dice score': val_score,
-                            'images': wandb.Image(batch_image[0].cpu(), masks={
-                                'true': wandb.Image(batch_mask[0].float().cpu()),
-                                'pred': wandb.Image(masks_pred[0].cpu()),
-                            }),
+                            'images (training)': wandb.Image(batch_image[0].cpu()),
+                            'masks (training)': [ 
+                                wandb.Image(batch_mask[0].float().cpu()),
+                                wandb.Image(masks_pred[0].cpu()),
+                            ],
                             'step': global_step,
                             'epoch': epoch,
+                            'Pixel Accuracy (training)': pixel_accuracy,
+                            'IoU Score (training)': jaccard_score,
+                            'Dice Score (training)': dice_score,
+                            'Recalls (training)': recall,
                             **histograms
                         })
 
@@ -238,8 +254,7 @@ class UnetTraining:
 
             # Early Stopping
             if epoch - last_best_epoch > self.valid_eval_step  * 3:
-                #self.save_checkpoint(epoch, True)
-                torch.save
+                self.save_checkpoint(epoch, True)
                 log.info(f'[TRAINING]: Early stopping training at epoch ${epoch}!')
                 break
 

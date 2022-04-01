@@ -62,7 +62,7 @@ class Dataset(Dataset):
             temp_mask = augmentation['mask']
 
         temp_mask = temp_mask.unsqueeze(0)
-        temp_mask = (temp_mask > 0.5).float()
+        temp_mask = (temp_mask > 0.5)
 
         return {
             'image': torch.as_tensor(temp_img).float().contiguous(),

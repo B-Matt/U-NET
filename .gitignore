@@ -134,3 +134,6 @@ cache/*
 wandb/*
 checkpoints/*
 module_tests.py
+
+utils/config.py
+config.json
