@@ -43,15 +43,15 @@ def evaluate(net, dataloader, device, training):
 
             
     training.log({
-        'images (training)': wandb.Image(image[0].cpu()),
-        'masks (training)': [ 
+        'Images [validation]': wandb.Image(image[0].cpu()),
+        'Masks [validation]': [ 
             wandb.Image(mask_true[0].float().cpu()),
             wandb.Image(mask_pred[0].cpu()),
         ],
-        'Pixel Accuracy (validation)': pixel_accuracy_sum / num_val_batches,
-        'IoU Score (validation)': iou_sum / num_val_batches,
-        'Dice Score (validation)': dice_sum / num_val_batches,
-        'Recalls (validation)': recall_sum / num_val_batches,
+        'Pixel Accuracy [validation]': pixel_accuracy_sum / num_val_batches,
+        'IoU Score [validation]': iou_sum / num_val_batches,
+        'Dice Score [validation]': dice_sum / num_val_batches,
+        'Recalls [validation]': recall_sum / num_val_batches,
     })
 
     net.train()

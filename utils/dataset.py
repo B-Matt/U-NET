@@ -29,7 +29,7 @@ class Dataset(Dataset):
     def preload_image_data(self, data_dir: string, img_dir: string, type: DatasetType):
         dataset_files: List = []
         with open(pathlib.Path(data_dir, f'{type.value}.txt'), mode='r', encoding='utf-8') as file:
-            for i, line in enumerate(file):
+            for line in file:
                 path = pathlib.Path(data_dir, img_dir, line.strip())
                 data_info = data_info_tuple(
                     pathlib.Path(path, 'Image'),
