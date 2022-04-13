@@ -144,7 +144,7 @@ class BinaryMetrics():
         self.eps = eps
         self.activation = activation
 
-    def _calculate_overlap_metrics(self, gt, pred):
+    def _calculate_overlap_metrics(self, gt, pred, eps):
         output = pred.view(-1, )
         target = gt.view(-1, ).float()
 
@@ -153,12 +153,12 @@ class BinaryMetrics():
         fn = torch.sum((1 - output) * target)  # FN
         tn = torch.sum((1 - output) * (1 - target))  # TN
 
-        pixel_acc = (tp + tn + self.eps) / (tp + tn + fp + fn + self.eps)
+        pixel_acc = (tp + tn + eps) / (tp + tn + fp + fn + eps)
         dice = (2 * tp + self.eps) / (2 * tp + fp + fn + self.eps)
-        precision = (tp + self.eps) / (tp + fp + self.eps)
-        recall = (tp + self.eps) / (tp + fn + self.eps)
-        specificity = (tn + self.eps) / (tn + fp + self.eps)
-        jaccard_index = (tp + self.eps) / (tp + fp + fn + self.eps)
+        precision = (tp + eps) / (tp + fp + eps)
+        recall = (tp + eps) / (tp + fn + eps)
+        specificity = (tn + eps) / (tn + fp + eps)
+        jaccard_index = (tp + eps) / (tp + fp + fn + eps)
         return pixel_acc, dice, precision, specificity, recall, jaccard_index
 
     def __call__(self, y_true, y_pred):
@@ -178,7 +178,5 @@ class BinaryMetrics():
 
         assert activated_pred.shape[1] == 1, 'Predictions must contain only one channel' \
                                              ' when performing binary segmentation'
-        pixel_acc, dice, precision, specificity, recall, jaccard_index = self._calculate_overlap_metrics(y_true.to(y_pred.device,
-                                                                                                    dtype=torch.float),
-                                                                                          activated_pred)
+        pixel_acc, dice, precision, specificity, recall, jaccard_index = self._calculate_overlap_metrics(y_true.to(y_pred.device, dtype=torch.float), activated_pred, self.eps)
         return [pixel_acc, dice, precision, specificity, recall, jaccard_index]

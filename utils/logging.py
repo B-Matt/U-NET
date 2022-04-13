@@ -7,7 +7,7 @@ logger.setLevel(logging.INFO)
 for handler in list(logger.handlers):
     logger.removeHandler(handler)
 
-logfmt_str = "%(asctime)s %(levelname)-8s pid:%(process)d %(name)s:%(lineno)03d:%(funcName)s %(message)s"
+logfmt_str = "%(asctime)s %(levelname)-8s %(name)s:%(lineno)03d:%(funcName)s %(message)s\n"
 formatter = logging.Formatter(logfmt_str)
 
 streamHandler = logging.StreamHandler()

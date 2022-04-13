@@ -132,6 +132,7 @@ dmypy.json
 data/*
 cache/*
 wandb/*
+log/*
 checkpoints/*
 module_tests.py
 
