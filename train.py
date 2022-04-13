@@ -60,7 +60,7 @@ class UnetTraining:
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=learning_rate, weight_decay=1e-8, momentum=0.9)
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='max', min_lr=1e-6, patience=5, cooldown=5, verbose=True)
         self.early_stopping = EarlyStopping(patience=10, min_delta=0)
-        self.class_labels = { 0: 'background', 1: 'fire', 2: 'smoke' }
+        self.class_labels = { 0: 'background', 1: 'fire' }
 
         self.get_augmentations()
         self.get_loaders()
@@ -222,11 +222,11 @@ class UnetTraining:
                                 'Learning Rate': self.optimizer.param_groups[0]['lr'],
                                 'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
                                         'prediction': {
-                                            'mask_data': masks_pred[0].float().cpu().detach().numpy(),
+                                            'mask_data': masks_pred[0].float().cpu().detach().squeeze(0).numpy(),
                                             'class_labels': self.class_labels
                                         },
                                         'ground_truth': {
-                                            'mask_data': batch_mask[0].float().cpu().detach().numpy(),
+                                            'mask_data': batch_mask[0].float().cpu().detach().squeeze(0).numpy(),
                                             'class_labels': self.class_labels
                                         },
                                     }

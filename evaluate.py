@@ -40,11 +40,11 @@ def evaluate(net, dataloader, device, class_labels, training):
     training.log({
         'Images [validation]': wandb.Image(image[0].cpu(), masks={
                 'prediction': {
-                    'mask_data': mask_true[0].float().cpu().detach().numpy(),
+                    'mask_data': mask_true[0].float().cpu().detach().squeeze(0).numpy(),
                     'class_labels': class_labels
                 },
                 'ground_truth': {
-                    'mask_data': mask_pred[0].float().cpu().detach().numpy(),
+                    'mask_data': mask_pred[0].float().cpu().detach().squeeze(0).numpy(),
                     'class_labels': class_labels
                 },
             }
