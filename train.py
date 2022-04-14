@@ -1,5 +1,4 @@
 import datetime
-from tabnanny import verbose
 import wandb
 import torch
 
@@ -28,10 +27,11 @@ log.setLevel(logging.INFO)
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = False
 
+# TODO: Sweep for batch size, num epochs, momentum, weight_decay
 # Hyperparameters etc.
 LEARNING_RATE = 1e-3
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-BATCH_SIZE = 7
+BATCH_SIZE = 6
 NUM_EPOCHS = 250
 NUM_WORKERS = 6
 PATCH_SIZE = 512
@@ -58,7 +58,7 @@ class UnetTraining:
 
         self.device = device
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=learning_rate, weight_decay=1e-8, momentum=0.9)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='max', min_lr=1e-6, patience=5, cooldown=5, verbose=True)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='max', min_lr=1e-8, patience=15, cooldown=10, verbose=True)
         self.early_stopping = EarlyStopping(patience=10, min_delta=0)
         self.class_labels = { 0: 'background', 1: 'fire' }
 
@@ -85,18 +85,14 @@ class UnetTraining:
                     A.MotionBlur(p=0.5),
                     A.Sharpen(p=0.2),
                 ], p=0.8),    
-                A.Normalize(
-                    max_pixel_value=255.0,
-                ),
+                A.ToFloat(max_value=255.0),
                 ToTensorV2(),
             ]
         )
 
         self.val_transforms = A.Compose(
         [
-            A.Normalize(
-                max_pixel_value=255.0,
-            ),
+            A.ToFloat(max_value=255.0),
             ToTensorV2(),
         ],
     )
@@ -180,17 +176,21 @@ class UnetTraining:
                 progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img')
 
                 for batch in self.train_loader:
-                    self.optimizer.zero_grad(set_to_none=True)
+                    for param in self.model.parameters():
+                        param.grad = None
 
+                    # Get Batch Of Images
                     batch_image = batch['image'].to(self.device, non_blocking=True)
                     batch_mask = batch['mask'].to(self.device, non_blocking=True)
                     pixel_accuracy = dice_score = precision = specificity = recall = jaccard_score = 0
 
+                    # Predict
                     with torch.cuda.amp.autocast(enabled=self.using_amp):
                         masks_pred = self.model(batch_image)
                         pixel_accuracy, dice_score, precision, specificity, recall, jaccard_score = metric_calculator(batch_mask, masks_pred)
                         loss = criterion(masks_pred, batch_mask)
 
+                    # Scale Gradients
                     grad_scaler.scale(loss).backward()
                     grad_scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
@@ -214,19 +214,19 @@ class UnetTraining:
                                 histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
                                 histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
 
-                            val_score = evaluate(self.model, self.val_loader, self.device, self.class_labels, training)
-                            self.scheduler.step(val_score)
+                            val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, training)
+                            self.scheduler.step(val_loss)
                             masks_pred = (masks_pred > 0.5).float()
 
                             training.log({
                                 'Learning Rate': self.optimizer.param_groups[0]['lr'],
                                 'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
                                         'prediction': {
-                                            'mask_data': masks_pred[0].float().cpu().detach().squeeze(0).numpy(),
+                                            'mask_data': masks_pred[0].cpu().detach().squeeze(0).numpy(),
                                             'class_labels': self.class_labels
                                         },
                                         'ground_truth': {
-                                            'mask_data': batch_mask[0].float().cpu().detach().squeeze(0).numpy(),
+                                            'mask_data': batch_mask[0].cpu().detach().squeeze(0).numpy(),
                                             'class_labels': self.class_labels
                                         },
                                     }
@@ -239,12 +239,12 @@ class UnetTraining:
                                 **histograms
                             })
 
-                            if val_score > last_best_score:
+                            if val_loss > last_best_score:
                                 self.save_checkpoint(epoch, True)
-                                last_best_score = val_score
+                                last_best_score = val_loss
 
                 training.log({
-                    'Loss [training]': epoch_loss.item(),
+                    'Loss [training]': epoch_loss,
                     'Epoch': epoch,
                 })
                 

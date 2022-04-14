@@ -39,12 +39,12 @@ def evaluate(net, dataloader, device, class_labels, training):
 
     training.log({
         'Images [validation]': wandb.Image(image[0].cpu(), masks={
-                'prediction': {
-                    'mask_data': mask_true[0].float().cpu().detach().squeeze(0).numpy(),
+                'ground_truth': {
+                    'mask_data': mask_true[0].cpu().detach().squeeze(0).numpy(),
                     'class_labels': class_labels
                 },
-                'ground_truth': {
-                    'mask_data': mask_pred[0].float().cpu().detach().squeeze(0).numpy(),
+                'prediction': {
+                    'mask_data': mask_pred[0].cpu().detach().squeeze(0).numpy(),
                     'class_labels': class_labels
                 },
             }
@@ -60,6 +60,6 @@ def evaluate(net, dataloader, device, class_labels, training):
     
     # Fixes a potential division by zero error
     if num_val_batches == 0:
-        return dice_sum
+        return global_loss
 
-    return dice_sum / num_val_batches
+    return global_loss / num_val_batches
