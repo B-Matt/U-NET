@@ -3,10 +3,9 @@ import wandb
 import torch
 
 from pathlib import Path
-
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-
+from monai.losses import DiceLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -163,7 +162,7 @@ class UnetTraining:
         wandb.watch(self.model)
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
-        criterion = torch.nn.BCEWithLogitsLoss()
+        criterion = DiceLoss(squared_pred=True, to_onehot_y=False, sigmoid=True) #torch.nn.BCEWithLogitsLoss()
         metric_calculator = BinaryMetrics()
 
         global_step = 0

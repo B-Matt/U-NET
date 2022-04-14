@@ -2,6 +2,7 @@ import torch
 import wandb
 
 from tqdm import tqdm
+from monai.losses import DiceLoss
 from utils.metrics import BinaryMetrics
 
 
@@ -9,7 +10,7 @@ def evaluate(net, dataloader, device, class_labels, training):
     net.eval()
     num_val_batches = len(dataloader)
     metric_calculator = BinaryMetrics()
-    criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = DiceLoss(squared_pred=True, to_onehot_y=False, sigmoid=True) #torch.nn.BCEWithLogitsLoss()
 
     pixel_accuracy_sum = 0
     dice_sum = 0

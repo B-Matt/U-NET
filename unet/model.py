@@ -34,7 +34,7 @@ class UNet(nn.Module):
         x = self.up_conv_4(x, x1)
 
         logits = self.out_conv(x)
-        return logits
+        return nn.Sigmoid(logits)
 
 def test():
     x = torch.randn((3, 1, 160, 160))
