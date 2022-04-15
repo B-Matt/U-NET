@@ -57,7 +57,7 @@ class UnetTraining:
 
         self.device = device
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=learning_rate, weight_decay=1e-8, momentum=0.9)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='max', min_lr=1e-8, patience=15, cooldown=10, verbose=True)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='min', min_lr=1e-8, patience=25, cooldown=15, verbose=True)
         self.early_stopping = EarlyStopping(patience=10, min_delta=0)
         self.class_labels = { 0: 'background', 1: 'fire' }
 
@@ -162,97 +162,97 @@ class UnetTraining:
         wandb.watch(self.model)
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
-        criterion = DiceLoss(squared_pred=True, to_onehot_y=False, sigmoid=True) #torch.nn.BCEWithLogitsLoss()
+        criterion = DiceLoss(sigmoid=True) #torch.nn.BCEWithLogitsLoss()
         metric_calculator = BinaryMetrics()
 
         global_step = 0
         last_best_score = 0
 
-        with torch.autograd.detect_anomaly():
-            for epoch in range(self.num_epochs):
-                self.model.train()
-                epoch_loss = 0
-                progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img')
+        for epoch in range(self.num_epochs):
+            self.model.train()
+            epoch_loss = 0
+            progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img')
 
-                for batch in self.train_loader:
-                    for param in self.model.parameters():
-                        param.grad = None
+            for batch in self.train_loader:
+                # Zero Grad
+                for param in self.model.parameters():
+                    param.grad = None
 
-                    # Get Batch Of Images
-                    batch_image = batch['image'].to(self.device, non_blocking=True)
-                    batch_mask = batch['mask'].to(self.device, non_blocking=True)
-                    pixel_accuracy = dice_score = precision = specificity = recall = jaccard_score = 0
+                # Get Batch Of Images
+                batch_image = batch['image'].to(self.device, non_blocking=True)
+                batch_mask = batch['mask'].to(self.device, non_blocking=True)
+                pixel_accuracy = dice_score = precision = specificity = recall = jaccard_score = 0
 
-                    # Predict
-                    with torch.cuda.amp.autocast(enabled=self.using_amp):
-                        masks_pred = self.model(batch_image)
-                        pixel_accuracy, dice_score, precision, specificity, recall, jaccard_score = metric_calculator(batch_mask, masks_pred)
-                        loss = criterion(masks_pred, batch_mask)
+                # Predict
+                with torch.cuda.amp.autocast(enabled=self.using_amp):
+                    masks_pred = self.model(batch_image)
+                    pixel_accuracy, dice_score, precision, specificity, recall, jaccard_score = metric_calculator(batch_mask, masks_pred)
+                    loss = criterion(masks_pred, batch_mask)
 
-                    # Scale Gradients
-                    grad_scaler.scale(loss).backward()
-                    grad_scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
-                    
-                    grad_scaler.step(self.optimizer)
-                    grad_scaler.update()
+                # Scale Gradients
+                grad_scaler.scale(loss).backward()
+                grad_scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
+                
+                grad_scaler.step(self.optimizer)
+                grad_scaler.update()
 
-                    # Show batch progress to terminal
-                    progress_bar.update(batch_image.shape[0])
-                    global_step += 1
-                    epoch_loss += loss.item()
-                    progress_bar.set_postfix(**{'Loss': loss.item(), 'Dice Score': dice_score.item(), 'Pixel Accuracy': pixel_accuracy.item(), 'Precision': precision.item(), 'Recall': recall.item() })
-                    
-                    # Evaluation of training
-                    eval_step = (int(len(self.train_dataset)) // (self.valid_eval_step * self.batch_size))
-                    if eval_step > 0:
-                        if global_step % eval_step == 0:
-                            histograms = {}
-                            for tag, value in self.model.named_parameters():
-                                tag = tag.replace('/', '.')
-                                histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
-                                histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
-
-                            val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, training)
-                            self.scheduler.step(val_loss)
-                            masks_pred = (masks_pred > 0.5).float()
-
-                            training.log({
-                                'Learning Rate': self.optimizer.param_groups[0]['lr'],
-                                'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
-                                        'prediction': {
-                                            'mask_data': masks_pred[0].cpu().detach().squeeze(0).numpy(),
-                                            'class_labels': self.class_labels
-                                        },
-                                        'ground_truth': {
-                                            'mask_data': batch_mask[0].cpu().detach().squeeze(0).numpy(),
-                                            'class_labels': self.class_labels
-                                        },
-                                    }
-                                ),
-                                'Epoch': epoch,
-                                'Pixel Accuracy [training]': pixel_accuracy,
-                                'IoU Score [training]': jaccard_score,
-                                'Dice Score [training]': dice_score,
-                                'Recalls [training]': recall,
-                                **histograms
-                            })
-
-                            if val_loss > last_best_score:
-                                self.save_checkpoint(epoch, True)
-                                last_best_score = val_loss
+                # Show batch progress to terminal
+                progress_bar.update(batch_image.shape[0])
+                global_step += 1
+                epoch_loss += loss.item()
+                progress_bar.set_postfix(**{'Loss': loss.item(), 'Dice Score': dice_score.item(), 'Pixel Accuracy': pixel_accuracy.item(), 'Precision': precision.item(), 'IoU': jaccard_score.item() })
 
                 training.log({
-                    'Loss [training]': epoch_loss,
+                    'Loss [training]': loss.item(),
                     'Epoch': epoch,
                 })
                 
-                # Saving last model
-                if self.save_checkpoint:
-                    self.save_checkpoint(epoch, False)
+                # Evaluation of training
+                eval_step = (int(len(self.train_dataset)) // (self.valid_eval_step * self.batch_size))
+                if eval_step > 0:
+                    if global_step % eval_step == 0:
+                        histograms = {}
+                        for tag, value in self.model.named_parameters():
+                            tag = tag.replace('/', '.')
+                            histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
+                            histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
 
-                # Early Stopping
-                if self.early_stopping.early_stop:
+                        val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, training)
+                        self.scheduler.step(val_loss)
+                        masks_pred = (masks_pred > 0.5).float()
+
+                        training.log({
+                            'Learning Rate': self.optimizer.param_groups[0]['lr'],
+                            'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
+                                    'prediction': {
+                                        'mask_data': masks_pred[0].cpu().detach().squeeze(0).numpy(),
+                                        'class_labels': self.class_labels
+                                    },
+                                    'ground_truth': {
+                                        'mask_data': batch_mask[0].cpu().detach().squeeze(0).numpy(),
+                                        'class_labels': self.class_labels
+                                    },
+                                }
+                            ),
+                            'Epoch': epoch,
+                            'Pixel Accuracy [training]': pixel_accuracy,
+                            'IoU Score [training]': jaccard_score,
+                            'Dice Score [training]': dice_score,
+                            'Recalls [training]': recall,
+                            **histograms
+                        })
+
+                        if val_loss > last_best_score:
+                            self.save_checkpoint(epoch, True)
+                            last_best_score = val_loss
+            
+            # Saving last model
+            if self.save_checkpoint:
+                self.save_checkpoint(epoch, False)
+
+            # Early Stopping
+            if self.early_stopping.early_stop:
                     self.save_checkpoint(epoch, True)
                     log.info(f'[TRAINING]: Early stopping training at epoch ${epoch}!')
                     break

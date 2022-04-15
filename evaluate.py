@@ -10,7 +10,7 @@ def evaluate(net, dataloader, device, class_labels, training):
     net.eval()
     num_val_batches = len(dataloader)
     metric_calculator = BinaryMetrics()
-    criterion = DiceLoss(squared_pred=True, to_onehot_y=False, sigmoid=True) #torch.nn.BCEWithLogitsLoss()
+    criterion = DiceLoss(sigmoid=False) #torch.nn.BCEWithLogitsLoss()
 
     pixel_accuracy_sum = 0
     dice_sum = 0
@@ -33,7 +33,6 @@ def evaluate(net, dataloader, device, class_labels, training):
             pixel_accuracy_sum += pixel_accuracy
             dice_sum += dice_score
             iou_sum += jaccard_score
-            recall_sum += recall
 
             loss = criterion(mask_pred, mask_true)
             global_loss += loss.item()
@@ -54,7 +53,6 @@ def evaluate(net, dataloader, device, class_labels, training):
         'Pixel Accuracy [validation]': pixel_accuracy_sum / num_val_batches,
         'IoU Score [validation]': iou_sum / num_val_batches,
         'Dice Score [validation]': dice_sum / num_val_batches,
-        'Recalls [validation]': recall_sum / num_val_batches,
     })
 
     net.train()
