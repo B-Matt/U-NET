@@ -1,8 +1,10 @@
 import torch
 import wandb
 
+import numpy as np
+import torch.nn.functional as F
+
 from tqdm import tqdm
-from monai.losses import DiceLoss
 from utils.metrics import BinaryMetrics
 
 
@@ -10,13 +12,12 @@ def evaluate(net, dataloader, device, class_labels, training):
     net.eval()
     num_val_batches = len(dataloader)
     metric_calculator = BinaryMetrics()
-    criterion = DiceLoss(sigmoid=False) #torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.BCEWithLogitsLoss()
 
-    pixel_accuracy_sum = 0
-    dice_sum = 0
-    iou_sum = 0
-    recall_sum = 0
-    global_loss = 0
+    pixel_accuracy = []
+    dice_score = []
+    iou_score = []
+    global_loss = []
 
     for batch in tqdm(dataloader, total=num_val_batches, desc='Validation', unit='batch', leave=False):
         image, mask_true = batch['image'], batch['mask']
@@ -27,15 +28,15 @@ def evaluate(net, dataloader, device, class_labels, training):
 
         with torch.no_grad():
             mask_pred = net(image)
-            mask_pred = (torch.sigmoid(mask_pred) > 0.5).float()
-            pixel_accuracy, dice_score, precision, specificity, recall, jaccard_score = metric_calculator(mask_true, mask_pred)
+            mask_pred = (mask_pred > 0.5).float()
+            metrics = metric_calculator(mask_true, mask_pred)
 
-            pixel_accuracy_sum += pixel_accuracy
-            dice_sum += dice_score
-            iou_sum += jaccard_score
+            pixel_accuracy.append(metrics['pixel_acc'])
+            dice_score.append(metrics['dice_score'])
+            iou_score.append(metrics['jaccard_index'])
 
             loss = criterion(mask_pred, mask_true)
-            global_loss += loss.item()
+            global_loss.append(loss)
 
     training.log({
         'Images [validation]': wandb.Image(image[0].cpu(), masks={
@@ -49,16 +50,12 @@ def evaluate(net, dataloader, device, class_labels, training):
                 },
             }
         ),
-        'Loss [validation]': global_loss / num_val_batches,
-        'Pixel Accuracy [validation]': pixel_accuracy_sum / num_val_batches,
-        'IoU Score [validation]': iou_sum / num_val_batches,
-        'Dice Score [validation]': dice_sum / num_val_batches,
+        'Loss [validation]': torch.mean(torch.tensor(global_loss)).item(),
+        'Pixel Accuracy [validation]': torch.mean(torch.tensor(pixel_accuracy)).item(),
+        'IoU Score [validation]': torch.mean(torch.tensor(iou_score)).item(),
+        'Dice Score [validation]': torch.mean(torch.tensor(dice_score)).item(),
     })
 
     net.train()
     
-    # Fixes a potential division by zero error
-    if num_val_batches == 0:
-        return global_loss
-
-    return global_loss / num_val_batches
+    return np.average(global_loss)

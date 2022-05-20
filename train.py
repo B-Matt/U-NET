@@ -2,10 +2,11 @@ import datetime
 import wandb
 import torch
 
-from pathlib import Path
+import numpy as np
 import albumentations as A
+
+from pathlib import Path
 from albumentations.pytorch import ToTensorV2
-from monai.losses import DiceLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -24,18 +25,17 @@ log.setLevel(logging.INFO)
 
 # PyTorch Settings
 torch.backends.cudnn.enabled = True
-torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.benchmark = True
 
-# TODO: Sweep for batch size, num epochs, momentum, weight_decay
 # Hyperparameters etc.
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-2
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 BATCH_SIZE = 6
-NUM_EPOCHS = 250
-NUM_WORKERS = 6
-PATCH_SIZE = 512
+NUM_EPOCHS = 300
+NUM_WORKERS = 4
+PATCH_SIZE = 600
 PIN_MEMORY = True
-LOAD_MODEL = True
+LOAD_MODEL = False
 VALID_EVAL_STEP = 2
 SAVING_CHECKPOINT = True
 USING_AMP = True
@@ -48,7 +48,7 @@ class UnetTraining:
         self.batch_size = batch_size
         self.num_epochs = num_epochs
         self.num_workers = num_workers
-        self.valid_eval_step  = valid_eval_step 
+        self.valid_eval_step  = valid_eval_step
         self.learning_rate = learning_rate
         self.pin_memory = pin_memory
         self.saving_checkpoints = saving_checkpoints
@@ -56,9 +56,9 @@ class UnetTraining:
         self.patch_size = patch_size
 
         self.device = device
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=learning_rate, weight_decay=1e-8, momentum=0.9)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='min', min_lr=1e-8, patience=25, cooldown=15, verbose=True)
-        self.early_stopping = EarlyStopping(patience=10, min_delta=0)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=learning_rate, pct_start=0.2, steps_per_epoch=len(self.train_dataset) // batch_size, epochs=num_epochs, anneal_strategy='linear', verbose=False)
+        self.early_stopping = EarlyStopping(patience=20, verbose=True)
         self.class_labels = { 0: 'background', 1: 'fire' }
 
         self.get_augmentations()
@@ -149,6 +149,7 @@ class UnetTraining:
         log.info(f'''[TRAINING]:
             Epochs:          {self.num_epochs}
             Batch size:      {self.batch_size}
+            Patch size:      {self.patch_size}
             Learning rate:   {self.learning_rate}
             Training size:   {int(len(self.train_dataset))}
             Validation size: {int(len(self.val_dataset))}
@@ -159,18 +160,24 @@ class UnetTraining:
 
         training = wandb.init(project='firebot-unet', resume='allow', entity='firebot031')
         training.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate, save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
-        wandb.watch(self.model)
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
-        criterion = DiceLoss(sigmoid=True) #torch.nn.BCEWithLogitsLoss()
+        criterion = torch.nn.BCEWithLogitsLoss()
         metric_calculator = BinaryMetrics()
 
         global_step = 0
-        last_best_score = 0
+        last_best_score = float('inf')
+        training_metrics = {
+            'pixel_acc': [],
+            'dice_score': [],
+            'jaccard_index': []
+        }
 
         for epoch in range(self.num_epochs):
+            wandb.watch(self.model)
             self.model.train()
-            epoch_loss = 0
+
+            epoch_loss = []
             progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img')
 
             for batch in self.train_loader:
@@ -181,45 +188,39 @@ class UnetTraining:
                 # Get Batch Of Images
                 batch_image = batch['image'].to(self.device, non_blocking=True)
                 batch_mask = batch['mask'].to(self.device, non_blocking=True)
-                pixel_accuracy = dice_score = precision = specificity = recall = jaccard_score = 0
+                metrics = {}
 
                 # Predict
                 with torch.cuda.amp.autocast(enabled=self.using_amp):
                     masks_pred = self.model(batch_image)
-                    pixel_accuracy, dice_score, precision, specificity, recall, jaccard_score = metric_calculator(batch_mask, masks_pred)
+                    metrics = metric_calculator(batch_mask, masks_pred)
                     loss = criterion(masks_pred, batch_mask)
 
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
                 grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5)
                 
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
+                self.scheduler.step()
 
                 # Show batch progress to terminal
                 progress_bar.update(batch_image.shape[0])
+                progress_bar.set_postfix(**{'Loss': loss.item() })
                 global_step += 1
-                epoch_loss += loss.item()
-                progress_bar.set_postfix(**{'Loss': loss.item(), 'Dice Score': dice_score.item(), 'Pixel Accuracy': pixel_accuracy.item(), 'Precision': precision.item(), 'IoU': jaccard_score.item() })
 
-                training.log({
-                    'Loss [training]': loss.item(),
-                    'Epoch': epoch,
-                })
+                # Calculate training metrics
+                training_metrics['pixel_acc'].append(metrics['pixel_acc'])
+                training_metrics['dice_score'].append(metrics['dice_score'])
+                training_metrics['jaccard_index'].append(metrics['jaccard_index'])
+                epoch_loss.append(loss)
                 
                 # Evaluation of training
                 eval_step = (int(len(self.train_dataset)) // (self.valid_eval_step * self.batch_size))
                 if eval_step > 0:
                     if global_step % eval_step == 0:
-                        histograms = {}
-                        for tag, value in self.model.named_parameters():
-                            tag = tag.replace('/', '.')
-                            histograms['Weights/' + tag] = wandb.Histogram(value.data.cpu())
-                            histograms['Gradients/' + tag] = wandb.Histogram(value.grad.data.cpu())
-
                         val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, training)
-                        self.scheduler.step(val_loss)
                         masks_pred = (masks_pred > 0.5).float()
 
                         training.log({
@@ -236,26 +237,40 @@ class UnetTraining:
                                 }
                             ),
                             'Epoch': epoch,
-                            'Pixel Accuracy [training]': pixel_accuracy,
-                            'IoU Score [training]': jaccard_score,
-                            'Dice Score [training]': dice_score,
-                            'Recalls [training]': recall,
-                            **histograms
+                            'Pixel Accuracy [training]': metrics['pixel_acc'].item(),
+                            'IoU Score [training]': metrics['jaccard_index'].item(),
+                            'Dice Score [training]': metrics['dice_score'].item(),
+                            'lr': self.scheduler.get_last_lr()[0]
                         })
 
-                        if val_loss > last_best_score:
+                        if val_loss < last_best_score:
                             self.save_checkpoint(epoch, True)
                             last_best_score = val_loss
-            
+
+            training.log({
+                'Loss [training]': torch.mean(torch.tensor(epoch_loss)).item(),
+                'Epoch': epoch,
+            })
+
             # Saving last model
             if self.save_checkpoint:
                 self.save_checkpoint(epoch, False)
 
             # Early Stopping
             if self.early_stopping.early_stop:
-                    self.save_checkpoint(epoch, True)
-                    log.info(f'[TRAINING]: Early stopping training at epoch ${epoch}!')
-                    break
+                self.save_checkpoint(epoch, True)
+                log.info(f'[TRAINING]: Early stopping training at epoch ${epoch}!')
+                break
+
+        # Push average training metrics
+        training.log({
+            'Learning Rate': self.optimizer.param_groups[0]['lr'],
+            'Epoch': self.num_epochs,
+            'lr': self.scheduler.get_last_lr()[0],
+            'Pixel Accuracy [training]': torch.mean(torch.tensor(training_metrics['pixel_acc'])).item(),
+            'IoU Score [training]': torch.mean(torch.tensor(training_metrics['jaccard_index'])).item(),
+            'Dice Score [training]': torch.mean(torch.tensor(training_metrics['dice_score'])).item(),
+        })
 
 if __name__ == '__main__':
     net = UNet(n_channels=3, n_classes=1, bilinear=False)

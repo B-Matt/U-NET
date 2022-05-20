@@ -1,31 +1,44 @@
-class EarlyStopping():
+import numpy as np
+import torch
+
+class EarlyStopping:
     """
-    Early stopping to stop the training when the loss does not improve after
-    certain epochs.
+        Early stops the training if validation loss doesn't improve after a given patience.
     """
-    def __init__(self, patience=5, min_delta=0):
+    def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint.pt', trace_func=print):
         """
-        :param patience: how many epochs to wait before stopping when loss is
-               not improving
-        :param min_delta: minimum difference between new loss and old loss for
-               new loss to be considered as an improvement
+        Args:
+            patience (int): How long to wait after last time validation loss improved.
+                            Default: 7
+            verbose (bool): If True, prints a message for each validation loss improvement. 
+                            Default: False
+            delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+                            Default: 0
+            path (str): Path for the checkpoint to be saved to.
+                            Default: 'checkpoint.pt'
+            trace_func (function): trace print function.
+                            Default: print            
         """
         self.patience = patience
-        self.min_delta = min_delta
+        self.verbose = verbose
         self.counter = 0
-        self.best_loss = None
+        self.best_score = None
         self.early_stop = False
+        self.val_loss_min = np.Inf
+        self.delta = delta
+        self.path = path
+        self.trace_func = trace_func
 
-    def __call__(self, val_loss):
-        if self.best_loss == None:
-            self.best_loss = val_loss
-        elif self.best_loss - val_loss > self.min_delta:
-            self.best_loss = val_loss
-            # reset counter if validation loss improves
-            self.counter = 0
-        elif self.best_loss - val_loss < self.min_delta:
+    def __call__(self, val_loss, model):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+        elif score < self.best_score + self.delta:
             self.counter += 1
-            print(f"INFO: Early stopping counter {self.counter} of {self.patience}")
+            self.trace_func(f'[TRAINING] EarlyStopping: {self.counter}/{self.patience}')
             if self.counter >= self.patience:
-                print('INFO: Early stopping')
                 self.early_stop = True
+        else:
+            self.best_score = score
+            self.counter = 0

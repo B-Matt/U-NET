@@ -11,7 +11,7 @@ from torch.utils.data import Dataset
 from utils.image_data import ImageData, data_info_tuple
 
 # Cache
-mem = joblib.Memory(cachedir='./cache', compress=True, verbose=0)
+mem = joblib.Memory(cachedir='./cache', compress=5, verbose=0)
 
 # Classes
 class DatasetType(enum.Enum):
