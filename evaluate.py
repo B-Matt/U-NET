@@ -19,7 +19,7 @@ def evaluate(net, dataloader, device, class_labels, training):
     iou_score = []
     global_loss = []
 
-    for batch in tqdm(dataloader, total=num_val_batches, desc='Validation', unit='batch', leave=False):
+    for batch in tqdm(dataloader, total=num_val_batches, desc='Validation', position=1, unit='batch', leave=False):
         image, mask_true = batch['image'], batch['mask']
 
         image = image.to(device=device, non_blocking=True)
@@ -36,7 +36,7 @@ def evaluate(net, dataloader, device, class_labels, training):
             iou_score.append(metrics['jaccard_index'])
 
             loss = criterion(mask_pred, mask_true)
-            global_loss.append(loss)
+            global_loss.append(loss.cpu())
 
     training.log({
         'Images [validation]': wandb.Image(image[0].cpu(), masks={
