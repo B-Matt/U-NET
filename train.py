@@ -37,9 +37,9 @@ torch.backends.cudnn.benchmark = True
 LEARNING_RATE = 1e-4
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 BATCH_SIZE = 3
-NUM_EPOCHS = 200
+NUM_EPOCHS = 100
 NUM_WORKERS = 4
-PATCH_SIZE = 670
+PATCH_SIZE = 710
 PIN_MEMORY = False
 LOAD_MODEL = False
 VALID_EVAL_STEP = 2
@@ -107,7 +107,7 @@ class UnetTraining:
         all_imgs = [file for file in listdir(pathlib.Path('data', 'imgs')) if not file.startswith('.')]
 
         # Split Dataset
-        val_percent = 0.8
+        val_percent = 0.6
         n_dataset = int(round(val_percent * len(all_imgs)))
 
         # Load train & validation datasets
@@ -172,7 +172,7 @@ class UnetTraining:
             Mixed Precision: {self.using_amp}
         ''')
 
-        wandb_log = wandb.init(project='ciirc-unet', resume='allow', entity='firebot031', mode="offline")
+        wandb_log = wandb.init(project='ciirc-unet', resume='allow', entity='firebot031')
         wandb_log.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate, save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
