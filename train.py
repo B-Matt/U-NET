@@ -34,15 +34,15 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 # Hyperparameters etc.
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-BATCH_SIZE = 3
-NUM_EPOCHS = 100
+BATCH_SIZE = 4
+NUM_EPOCHS = 150
 NUM_WORKERS = 4
-PATCH_SIZE = 710
+PATCH_SIZE = 730
 PIN_MEMORY = False
 LOAD_MODEL = False
-VALID_EVAL_STEP = 2
+VALID_EVAL_STEP = 1
 SAVING_CHECKPOINT = True
 USING_AMP = True
 
@@ -80,9 +80,7 @@ class UnetTraining:
                 A.Rotate(limit=(0, 10), p=0.5),
                 A.HorizontalFlip(p=0.6),
                 A.VerticalFlip(p=0.4),
-                A.OneOf([
-                    A.GridDistortion(p=0.4),
-                ], p=0.8),
+                A.GridDistortion(p=0.4),
                 A.RandomBrightnessContrast(p=0.8),
                 A.RandomGamma(p=0.8),
                 A.OneOf([
@@ -213,7 +211,7 @@ class UnetTraining:
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
                 grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 50)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 512)
                 
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
