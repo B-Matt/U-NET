@@ -1,14 +1,20 @@
 import datetime
 import wandb
 import torch
+import os
 
 import numpy as np
+from copy import copy
 import albumentations as A
 
 from pathlib import Path
 from albumentations.pytorch import ToTensorV2
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+import pathlib
+from os import listdir
+from os.path import splitext
 
 from evaluate import evaluate
 from unet.model import UNet
@@ -36,7 +42,7 @@ NUM_WORKERS = 4
 PATCH_SIZE = 256
 PIN_MEMORY = True
 LOAD_MODEL = False
-VALID_EVAL_STEP = 2
+VALID_EVAL_STEP = 1
 SAVING_CHECKPOINT = True
 USING_AMP = True
 
@@ -72,18 +78,16 @@ class UnetTraining:
         self.train_transforms = A.Compose(
             [
                 A.Rotate(limit=(0, 10), p=0.5),
-                A.HorizontalFlip(p=0.5),
-                A.OneOf([
-                    A.ElasticTransform(p=0.3),
-                    A.GridDistortion(p=0.4),
-                    A.OpticalDistortion(distort_limit=1, shift_limit=0.2, p=0.3),
-                ], p=0.8),
+                A.HorizontalFlip(p=0.6),
+                A.VerticalFlip(p=0.4),
+                A.GridDistortion(p=0.4),
                 A.RandomBrightnessContrast(p=0.8),
+                A.RandomGamma(p=0.8),
                 A.OneOf([
                     A.Blur(p=0.3),
                     A.MotionBlur(p=0.5),
                     A.Sharpen(p=0.2),
-                ], p=0.8),    
+                ], p=0.8),
                 A.ToFloat(max_value=255.0),
                 ToTensorV2(),
             ]
@@ -97,12 +101,20 @@ class UnetTraining:
     )
 
     def get_loaders(self):
-        self.train_dataset = Dataset(data_dir = r'data', img_dir = r'imgs', type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
-        self.train_dataset.shuffle()
-        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=False, prefetch_factor=3)
+        # Full Dataset
+        all_imgs = [file for file in listdir(pathlib.Path('data', 'imgs')) if not file.startswith('.')]
 
-        self.val_dataset = Dataset(data_dir = r'data', img_dir = r'imgs', type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
-        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False, prefetch_factor=3)
+        # Split Dataset
+        val_percent = 0.6
+        n_dataset = int(round(val_percent * len(all_imgs)))
+
+        # Load train & validation datasets
+        self.train_dataset = Dataset(data_dir='data', images=all_imgs[:n_dataset], type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
+        self.val_dataset = Dataset(data_dir='data', images=all_imgs[n_dataset:], type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms) 
+
+        # Get Loaders
+        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         if not self.saving_checkpoints:
@@ -158,8 +170,8 @@ class UnetTraining:
             Mixed Precision: {self.using_amp}
         ''')
 
-        training = wandb.init(project='firebot-unet', resume='allow', entity='firebot031')
-        training.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate, save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
+        wandb_log = wandb.init(project='ciirc-unet', resume='allow', entity='firebot031')
+        wandb_log.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate, save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
         criterion = torch.nn.BCEWithLogitsLoss()
@@ -178,7 +190,7 @@ class UnetTraining:
             self.model.train()
 
             epoch_loss = []
-            progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img')
+            progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img', position=0)
 
             for batch in self.train_loader:
                 # Zero Grad
@@ -199,7 +211,7 @@ class UnetTraining:
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
                 grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.0)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 512)
                 
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
@@ -219,11 +231,11 @@ class UnetTraining:
                 eval_step = (int(len(self.train_dataset)) // (self.valid_eval_step * self.batch_size))
                 if eval_step > 0:
                     if global_step % eval_step == 0:
-                        val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, training)
+                        val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, wandb_log)
                         masks_pred = (masks_pred > 0.5).float()
                         self.scheduler.step(val_loss)
 
-                        training.log({
+                        wandb_log.log({
                             'Learning Rate': self.optimizer.param_groups[0]['lr'],
                             'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
                                     'prediction': {
@@ -246,29 +258,31 @@ class UnetTraining:
                             self.save_checkpoint(epoch, True)
                             last_best_score = val_loss
 
-            training.log({
+            progress_bar.close()
+            wandb_log.log({
                 'Loss [training]': torch.mean(torch.tensor(epoch_loss)).item(),
                 'Epoch': epoch,
             })
 
-            # Saving last model
+            # Saving last modelself.val_dataset.type
             if self.save_checkpoint:
                 self.save_checkpoint(epoch, False)
 
             # Early Stopping
             if self.early_stopping.early_stop:
                 self.save_checkpoint(epoch, True)
-                log.info(f'[TRAINING]: Early stopping training at epoch ${epoch}!')
+                log.info(f'[TRAINING]: Early stopping training at epoch {epoch}!')
                 break
 
         # Push average training metrics
-        training.log({
+        wandb_log.log({
             'Learning Rate': self.optimizer.param_groups[0]['lr'],
             'Epoch': self.num_epochs,
             'Pixel Accuracy [training]': torch.mean(torch.tensor(training_metrics['pixel_acc'])).item(),
             'IoU Score [training]': torch.mean(torch.tensor(training_metrics['jaccard_index'])).item(),
             'Dice Score [training]': torch.mean(torch.tensor(training_metrics['dice_score'])).item(),
         })
+        wandb_log.finish()
 
 if __name__ == '__main__':
     net = UNet(n_channels=3, n_classes=1, bilinear=False)

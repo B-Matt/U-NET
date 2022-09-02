@@ -26,8 +26,7 @@ class ImageData:
         self.info = info
         self.is_combined = is_combined
         self.patch_size = patch_size
-        
-        self.input_image = np.array(Image.open(Path(info.image, self._get_file_from_dir(info.image))))
+        self.input_image = np.array(Image.open(info.image))
 
         if not self.is_combined:
             try: 
@@ -36,7 +35,7 @@ class ImageData:
                 log.error("Combination of multiple masks currently not implement!")   
                 sys.exit(1)  
     
-        self.input_mask = np.array(Image.open(Path(info.mask, self._get_file_from_dir(info.mask))).convert('L'), dtype=np.float32)
+        self.input_mask = np.array(Image.open(info.mask).convert('L'), dtype=np.float32)
 
     def _get_file_from_dir(self, dir):
         for topdir, firs, files in os.walk(dir):
