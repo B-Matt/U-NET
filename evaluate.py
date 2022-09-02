@@ -50,12 +50,12 @@ def evaluate(net, dataloader, device, class_labels, training):
                 },
             }
         ),
-        'Loss [validation]': torch.mean(torch.tensor(global_loss)).item(),
-        'Pixel Accuracy [validation]': torch.mean(torch.tensor(pixel_accuracy)).item(),
-        'IoU Score [validation]': torch.mean(torch.tensor(iou_score)).item(),
-        'Dice Score [validation]': torch.mean(torch.tensor(dice_score)).item(),
+        'Loss [validation]': torch.mean(torch.tensor(global_loss).cpu()).item(),
+        'Pixel Accuracy [validation]': torch.mean(torch.tensor(pixel_accuracy).cpu()).item(),
+        'IoU Score [validation]': torch.mean(torch.tensor(iou_score).cpu()).item(),
+        'Dice Score [validation]': torch.mean(torch.tensor(dice_score).cpu()).item(),
     })
 
     net.train()
     
-    return np.average(global_loss)
+    return np.average(torch.tensor(global_loss).cpu())

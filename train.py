@@ -28,12 +28,12 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 
 # Hyperparameters etc.
-LEARNING_RATE = 1e-2
+LEARNING_RATE = 1e-3
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-BATCH_SIZE = 6
+BATCH_SIZE = 25
 NUM_EPOCHS = 300
 NUM_WORKERS = 4
-PATCH_SIZE = 600
+PATCH_SIZE = 256
 PIN_MEMORY = True
 LOAD_MODEL = False
 VALID_EVAL_STEP = 2
@@ -55,14 +55,14 @@ class UnetTraining:
         self.using_amp = using_amp
         self.patch_size = patch_size
 
-        self.device = device
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
-        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=learning_rate, pct_start=0.2, steps_per_epoch=len(self.train_dataset) // batch_size, epochs=num_epochs, anneal_strategy='linear', verbose=False)
-        self.early_stopping = EarlyStopping(patience=20, verbose=True)
-        self.class_labels = { 0: 'background', 1: 'fire' }
-
         self.get_augmentations()
         self.get_loaders()
+
+        self.device = device
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='min', min_lr=1e-8, patience=25, cooldown=15, verbose=True)
+        self.early_stopping = EarlyStopping(patience=30, verbose=True)
+        self.class_labels = { 0: 'background', 1: 'fire' }
 
         if load_model:
             self.load_checkpoint(Path('checkpoints'))
@@ -199,11 +199,10 @@ class UnetTraining:
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
                 grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 100.0)
                 
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
-                self.scheduler.step()
 
                 # Show batch progress to terminal
                 progress_bar.update(batch_image.shape[0])
@@ -222,6 +221,7 @@ class UnetTraining:
                     if global_step % eval_step == 0:
                         val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, training)
                         masks_pred = (masks_pred > 0.5).float()
+                        self.scheduler.step(val_loss)
 
                         training.log({
                             'Learning Rate': self.optimizer.param_groups[0]['lr'],
@@ -240,7 +240,6 @@ class UnetTraining:
                             'Pixel Accuracy [training]': metrics['pixel_acc'].item(),
                             'IoU Score [training]': metrics['jaccard_index'].item(),
                             'Dice Score [training]': metrics['dice_score'].item(),
-                            'lr': self.scheduler.get_last_lr()[0]
                         })
 
                         if val_loss < last_best_score:
@@ -266,7 +265,6 @@ class UnetTraining:
         training.log({
             'Learning Rate': self.optimizer.param_groups[0]['lr'],
             'Epoch': self.num_epochs,
-            'lr': self.scheduler.get_last_lr()[0],
             'Pixel Accuracy [training]': torch.mean(torch.tensor(training_metrics['pixel_acc'])).item(),
             'IoU Score [training]': torch.mean(torch.tensor(training_metrics['jaccard_index'])).item(),
             'Dice Score [training]': torch.mean(torch.tensor(training_metrics['dice_score'])).item(),
