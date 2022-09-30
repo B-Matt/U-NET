@@ -1,7 +1,7 @@
 from unet.architecture import *
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False):
+    def __init__(self, n_channels, n_classes):
         super(UNet, self).__init__()
 
         self.n_channels = n_channels
@@ -11,14 +11,12 @@ class UNet(nn.Module):
         self.down_conv_1 = DownConv(64, 128)
         self.down_conv_2 = DownConv(128, 256)
         self.down_conv_3 = DownConv(256, 512)
+        self.down_conv_4 = DownConv(512, 1024)
 
-        factor = 2 if bilinear else 1
-        self.down_conv_4 = DownConv(512, 1024 // factor)
-
-        self.up_conv_1 = UpConv(1024, 512 // factor, bilinear)
-        self.up_conv_2 = UpConv(512, 256 // factor, bilinear)
-        self.up_conv_3 = UpConv(256, 128 // factor, bilinear)
-        self.up_conv_4 = UpConv(128, 64 // factor, bilinear)
+        self.up_conv_1 = UpConv(1024, 512)
+        self.up_conv_2 = UpConv(512, 256)
+        self.up_conv_3 = UpConv(256, 128)
+        self.up_conv_4 = UpConv(128, 64)
         self.out_conv = OutConv(64, n_classes)
 
     def forward(self, x):
@@ -34,7 +32,7 @@ class UNet(nn.Module):
         x = self.up_conv_4(x, x1)
 
         logits = self.out_conv(x)
-        return logits
+        return logits #torch.sigmoid(logits)
 
 def test():
     x = torch.randn((3, 1, 160, 160))

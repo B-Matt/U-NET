@@ -133,6 +133,7 @@ data/*
 cache/*
 wandb/*
 log/*
+dataset
 checkpoints/*
 module_tests.py
 

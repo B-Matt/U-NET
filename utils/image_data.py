@@ -8,6 +8,7 @@ from collections import namedtuple
 from skimage.transform import resize
 
 from utils.logging import logging
+from utils.rgb import rgb2mask
 
 # Logging
 log = logging.getLogger(__name__)
@@ -18,15 +19,23 @@ data_info_tuple = namedtuple(
     'image, mask'
 )
 
+# Image Data Class
 class ImageData:
     """
         Class that loads image and mask (used for disk caching).
     """
-    def __init__(self, info: data_info_tuple, is_combined: bool, patch_size: int = 256) -> None:
+    def __init__(self, info: data_info_tuple, is_combined: bool = False, patch_size: int = 256, is_searching_dirs: bool = False) -> None:
         self.info = info
         self.is_combined = is_combined
         self.patch_size = patch_size
-        self.input_image = np.array(Image.open(info.image))
+
+        if is_searching_dirs == True:
+            path = Path(info.image, self._get_file_from_dir(info.image))
+            image = Image.open(path)            
+            self.input_image = np.asarray(image, dtype=np.uint8)
+        else:
+            image = Image.open(info.image)
+            self.input_image = np.asarray(image, dtype=np.uint8)
 
         if not self.is_combined:
             try: 
@@ -35,7 +44,12 @@ class ImageData:
                 log.error("Combination of multiple masks currently not implement!")   
                 sys.exit(1)  
     
-        self.input_mask = np.array(Image.open(info.mask).convert('L'), dtype=np.float32)
+        if is_searching_dirs == True:
+            mask = Image.open(Path(info.mask, self._get_file_from_dir(info.mask)))
+            self.input_mask = np.asarray(mask, dtype=np.uint8)
+        else:
+            mask = Image.open(info.mask)
+            self.input_mask = np.asarray(mask, dtype=np.uint8)
 
     def _get_file_from_dir(self, dir):
         for topdir, firs, files in os.walk(dir):
@@ -45,6 +59,7 @@ class ImageData:
     def get_full_image(self):
         img = self.input_image
         mask = self.input_mask
+        mask = rgb2mask(mask)
 
         # Padding
         height = self.input_image.shape[0]
@@ -55,7 +70,6 @@ class ImageData:
         after = pad_width
 
         if pad_width % 2 != 0:
-            before = pad_width
             after = pad_width + 1
 
         if height > width:

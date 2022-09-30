@@ -1,10 +1,10 @@
 import datetime
 import wandb
 import torch
+import sys
 import os
 
-import numpy as np
-from copy import copy
+import pathlib
 import albumentations as A
 
 from pathlib import Path
@@ -12,16 +12,13 @@ from albumentations.pytorch import ToTensorV2
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import pathlib
-from os import listdir
-from os.path import splitext
-
+from settings import *
 from evaluate import evaluate
 from unet.model import UNet
 
 from utils.dataset import Dataset, DatasetType
 from utils.early_stopping import EarlyStopping
-from utils.metrics import BinaryMetrics
+from utils.metrics import SegmentationMetrics
 
 # Logging
 from utils.logging import logging
@@ -29,48 +26,33 @@ from utils.logging import logging
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
-# PyTorch Settings
-torch.backends.cudnn.enabled = True
-torch.backends.cudnn.benchmark = True
-
-# Hyperparameters etc.
-LEARNING_RATE = 1e-3
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-BATCH_SIZE = 25
-NUM_EPOCHS = 300
-NUM_WORKERS = 4
-PATCH_SIZE = 256
-PIN_MEMORY = True
-LOAD_MODEL = False
-VALID_EVAL_STEP = 1
-SAVING_CHECKPOINT = True
-USING_AMP = True
-
 class UnetTraining:
-    def __init__(self, net: UNet, batch_size: int, device: torch.device, num_epochs: int, num_workers: int, valid_eval_step : int, learning_rate: float, pin_memory: bool, load_model: bool, saving_checkpoints: bool, using_amp: bool, patch_size: int):
+    def __init__(self, net: UNet):
         assert net is not None
-        self.model = net.to(device, non_blocking=True)
-                       
-        self.batch_size = batch_size
-        self.num_epochs = num_epochs
-        self.num_workers = num_workers
-        self.valid_eval_step  = valid_eval_step
-        self.learning_rate = learning_rate
-        self.pin_memory = pin_memory
-        self.saving_checkpoints = saving_checkpoints
-        self.using_amp = using_amp
-        self.patch_size = patch_size
+        self.model = net.to(DEVICE, non_blocking=True)
+        self.search_files = IS_SEARCHING_FILES
+        self.class_weights = torch.tensor([ 1.0, 27497 / 23673, 27497 / 3487 ], dtype=torch.float).to(DEVICE, non_blocking=True)
+
+        self.batch_size = BATCH_SIZE
+        self.num_epochs = NUM_EPOCHS
+        self.num_workers = NUM_WORKERS
+        self.valid_eval_step = VALID_EVAL_STEP
+        self.learning_rate = LEARNING_RATE
+        self.pin_memory = PIN_MEMORY
+        self.saving_checkpoints = SAVING_CHECKPOINT
+        self.using_amp = USING_AMP
+        self.patch_size = PATCH_SIZE
 
         self.get_augmentations()
         self.get_loaders()
 
-        self.device = device
-        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='min', min_lr=1e-8, patience=25, cooldown=15, verbose=True)
+        self.device = DEVICE
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.learning_rate, momentum=0.9, weight_decay=0.0005)
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=self.learning_rate, pct_start=0.2, steps_per_epoch=len(self.train_dataset) // self.batch_size, epochs=self.num_epochs, anneal_strategy='linear', verbose=False)
         self.early_stopping = EarlyStopping(patience=30, verbose=True)
-        self.class_labels = { 0: 'background', 1: 'fire' }
+        self.class_labels = {0: 'background', 1: 'fire', 2: 'smoke'}
 
-        if load_model:
+        if LOAD_MODEL:
             self.load_checkpoint(Path('checkpoints'))
             self.model.to(self.device, non_blocking=True)
 
@@ -78,48 +60,68 @@ class UnetTraining:
         self.train_transforms = A.Compose(
             [
                 A.Rotate(limit=(0, 10), p=0.5),
-                A.HorizontalFlip(p=0.6),
-                A.VerticalFlip(p=0.4),
-                A.GridDistortion(p=0.4),
+                A.HorizontalFlip(p=0.5),
+                A.OneOf([
+                    A.ElasticTransform(p=0.3),
+                    A.GridDistortion(p=0.4),
+                    A.OpticalDistortion(distort_limit=1, shift_limit=0.2, p=0.3),
+                ], p=0.8),
                 A.RandomBrightnessContrast(p=0.8),
-                A.RandomGamma(p=0.8),
                 A.OneOf([
                     A.Blur(p=0.3),
                     A.MotionBlur(p=0.5),
                     A.Sharpen(p=0.2),
                 ], p=0.8),
-                A.ToFloat(max_value=255.0),
                 ToTensorV2(),
             ]
         )
 
         self.val_transforms = A.Compose(
-        [
-            A.ToFloat(max_value=255.0),
-            ToTensorV2(),
-        ],
-    )
+            [
+                ToTensorV2(),
+            ],
+        )
 
     def get_loaders(self):
-        # Full Dataset
-        all_imgs = [file for file in listdir(pathlib.Path('data', 'imgs')) if not file.startswith('.')]
+        if self.search_files:
+            # Full Dataset
+            all_imgs = [file for file in os.listdir(pathlib.Path(
+                'data', 'imgs')) if not file.startswith('.')]
 
-        # Split Dataset
-        val_percent = 0.6
-        n_dataset = int(round(val_percent * len(all_imgs)))
+            # Split Dataset
+            val_percent = 0.6
+            n_dataset = int(round(val_percent * len(all_imgs)))
 
-        # Load train & validation datasets
-        self.train_dataset = Dataset(data_dir='data', images=all_imgs[:n_dataset], type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
-        self.val_dataset = Dataset(data_dir='data', images=all_imgs[n_dataset:], type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms) 
+            # Load train & validation datasets
+            self.train_dataset = Dataset(data_dir='data', images=all_imgs[:n_dataset], type=DatasetType.TRAIN,
+                                         is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
+            self.train_dataset.shuffle()
+            self.val_dataset = Dataset(data_dir='data', images=all_imgs[n_dataset:], type=DatasetType.VALIDATION,
+                                       is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
+
+            # Get Loaders
+            self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers,
+                                           batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
+            self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size,
+                                         num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
+            return
+
+        self.train_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.TRAIN,
+                                     is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
+        self.train_dataset.shuffle()
+        self.val_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.VALIDATION,
+                                   is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
 
         # Get Loaders
-        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
-        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
+        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers,
+                                       batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size,
+                                     num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         if not self.saving_checkpoints:
             return
-        
+
         if isinstance(self.model, torch.nn.DataParallel):
             self.model = self.model.module
 
@@ -142,7 +144,7 @@ class UnetTraining:
     def load_checkpoint(self, path: Path):
         log.info('[LOADING MODEL]: Started loading model checkpoint!')
         best_path = Path(path, 'best-checkpoint.pth.tar')
-        
+
         if best_path.is_file():
             path = best_path
         else:
@@ -155,7 +157,8 @@ class UnetTraining:
         self.model.load_state_dict(state_dict['model_state'])
         self.optimizer.load_state_dict(state_dict['optimizer_state'])
         self.optimizer.name = state_dict['optimizer_name']
-        log.info(f"[LOADING MODEL]: Loaded model with stats: epoch ({state_dict['epoch']}), time ({state_dict['time']})")
+        log.info(
+            f"[LOADING MODEL]: Loaded model with stats: epoch ({state_dict['epoch']}), time ({state_dict['time']})")
 
     def train(self):
         log.info(f'''[TRAINING]:
@@ -170,37 +173,34 @@ class UnetTraining:
             Mixed Precision: {self.using_amp}
         ''')
 
-        wandb_log = wandb.init(project='ciirc-unet', resume='allow', entity='firebot031')
-        wandb_log.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate, save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
+        wandb_log = wandb.init(project='firebot-unet',
+                               resume='allow', entity='firebot031')
+        wandb_log.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate,
+                                save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
-        criterion = torch.nn.BCEWithLogitsLoss()
-        metric_calculator = BinaryMetrics()
+        #criterion = torch.nn.BCEWithLogitsLoss()
+        criterion = torch.nn.CrossEntropyLoss(weight=self.class_weights, reduction='mean')
+        metric_calculator = SegmentationMetrics(activation='softmax')
 
         global_step = 0
         last_best_score = float('inf')
-        training_metrics = {
-            'pixel_acc': [],
-            'dice_score': [],
-            'jaccard_index': []
-        }
 
+        pixel_acc = 0.0
+        dice_score = 0.0
+        jaccard_index = 0.0
+
+        torch.cuda.empty_cache()
         for epoch in range(self.num_epochs):
-            wandb.watch(self.model)
             self.model.train()
 
             epoch_loss = []
             progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img', position=0)
 
             for batch in self.train_loader:
-                # Zero Grad
-                for param in self.model.parameters():
-                    param.grad = None
-
                 # Get Batch Of Images
                 batch_image = batch['image'].to(self.device, non_blocking=True)
                 batch_mask = batch['mask'].to(self.device, non_blocking=True)
-                metrics = {}
 
                 # Predict
                 with torch.cuda.amp.autocast(enabled=self.using_amp):
@@ -208,45 +208,47 @@ class UnetTraining:
                     metrics = metric_calculator(batch_mask, masks_pred)
                     loss = criterion(masks_pred, batch_mask)
 
+                # Zero Grad
+                self.optimizer.zero_grad(set_to_none=True)
+
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
                 grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 512)
-                
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 255)
+
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
 
                 # Show batch progress to terminal
                 progress_bar.update(batch_image.shape[0])
-                progress_bar.set_postfix(**{'Loss': loss.item() })
+                progress_bar.set_postfix(**{'Loss': loss.item()})
                 global_step += 1
 
                 # Calculate training metrics
-                training_metrics['pixel_acc'].append(metrics['pixel_acc'])
-                training_metrics['dice_score'].append(metrics['dice_score'])
-                training_metrics['jaccard_index'].append(metrics['jaccard_index'])
+                pixel_acc += metrics['pixel_acc']
+                dice_score += metrics['dice_score']
+                jaccard_index += metrics['jaccard_index']
                 epoch_loss.append(loss)
-                
+
                 # Evaluation of training
                 eval_step = (int(len(self.train_dataset)) // (self.valid_eval_step * self.batch_size))
                 if eval_step > 0:
                     if global_step % eval_step == 0:
                         val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, wandb_log)
-                        masks_pred = (masks_pred > 0.5).float()
-                        self.scheduler.step(val_loss)
+                        self.scheduler.step()
 
                         wandb_log.log({
                             'Learning Rate': self.optimizer.param_groups[0]['lr'],
                             'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
-                                    'prediction': {
-                                        'mask_data': masks_pred[0].cpu().detach().squeeze(0).numpy(),
-                                        'class_labels': self.class_labels
-                                    },
-                                    'ground_truth': {
-                                        'mask_data': batch_mask[0].cpu().detach().squeeze(0).numpy(),
-                                        'class_labels': self.class_labels
-                                    },
+                                'ground_truth': {
+                                    'mask_data': batch_mask[0].cpu().numpy(),
+                                    'class_labels': self.class_labels
+                                },
+                                'prediction': {
+                                    'mask_data': masks_pred.argmax(dim=1)[0].cpu().numpy(),
+                                    'class_labels': self.class_labels
                                 }
+                            }
                             ),
                             'Epoch': epoch,
                             'Pixel Accuracy [training]': metrics['pixel_acc'].item(),
@@ -271,22 +273,23 @@ class UnetTraining:
             # Early Stopping
             if self.early_stopping.early_stop:
                 self.save_checkpoint(epoch, True)
-                log.info(f'[TRAINING]: Early stopping training at epoch {epoch}!')
+                log.info(
+                    f'[TRAINING]: Early stopping training at epoch {epoch}!')
                 break
 
         # Push average training metrics
-        wandb_log.log({
-            'Learning Rate': self.optimizer.param_groups[0]['lr'],
-            'Epoch': self.num_epochs,
-            'Pixel Accuracy [training]': torch.mean(torch.tensor(training_metrics['pixel_acc'])).item(),
-            'IoU Score [training]': torch.mean(torch.tensor(training_metrics['jaccard_index'])).item(),
-            'Dice Score [training]': torch.mean(torch.tensor(training_metrics['dice_score'])).item(),
-        })
         wandb_log.finish()
 
 if __name__ == '__main__':
-    net = UNet(n_channels=3, n_classes=1, bilinear=False)
-    training = UnetTraining(net, BATCH_SIZE, DEVICE, NUM_EPOCHS, NUM_WORKERS, VALID_EVAL_STEP, LEARNING_RATE, PIN_MEMORY, LOAD_MODEL, SAVING_CHECKPOINT, USING_AMP, PATCH_SIZE)
+    net = UNet(n_channels=3, n_classes=NUM_CLASSES)
+    training = UnetTraining(net)
 
-    training.train()
+    try:
+        training.train()        
+    except KeyboardInterrupt:
+        try:
+            sys.exit(0)
+        except SystemExit:
+            os._exit(0)
+    
     logging.info('[TRAINING]: Training finished!')

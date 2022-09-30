@@ -100,15 +100,26 @@ class SegmentationMetrics(object):
         pixel_acc = (np.sum(matrix[0, :]) + self.eps) / (np.sum(matrix[0, :]) + np.sum(matrix[1, :]))
         dice = (2 * matrix[0] + self.eps) / (2 * matrix[0] + matrix[1] + matrix[2] + self.eps)
         precision = (matrix[0] + self.eps) / (matrix[0] + matrix[1] + self.eps)
+        specificity = (matrix[2] + self.eps) / (matrix[2] + matrix[0] + self.eps)
         recall = (matrix[0] + self.eps) / (matrix[0] + matrix[2] + self.eps)
+        jaccard_index = (matrix[0] + self.eps) / (matrix[0] + matrix[1] + matrix[2] + self.eps)
 
         if self.average:
             dice = np.average(dice)
             precision = np.average(precision)
+            specificity = np.average(specificity)
             recall = np.average(recall)
+            jaccard_index = np.average(jaccard_index)
 
-        return pixel_acc, dice, precision, recall
-
+        return {
+            'pixel_acc': pixel_acc,
+            'dice_score': dice,
+            'precision': precision,
+            'specificity': specificity,
+            'recall': recall,
+            'jaccard_index': jaccard_index
+        }
+    
     def __call__(self, y_true, y_pred):
         class_num = y_pred.size(1)
 
@@ -128,8 +139,7 @@ class SegmentationMetrics(object):
             raise NotImplementedError("Not a supported activation!")
 
         gt_onehot = self._one_hot(y_true, y_pred, class_num)
-        pixel_acc, dice, precision, recall = self._calculate_multi_metrics(gt_onehot, activated_pred, class_num)
-        return pixel_acc, dice, precision, recall
+        return self._calculate_multi_metrics(gt_onehot, activated_pred, class_num)
 
 
 class BinaryMetrics():
