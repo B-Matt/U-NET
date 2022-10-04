@@ -1,19 +1,14 @@
 import enum
-import joblib
 import random
 import functools
 import string
 import pathlib
-from os import listdir
 from os.path import splitext
 from typing import Any, List
 import torch
 from torch.utils.data import Dataset
 
 from utils.image_data import ImageData, data_info_tuple
-
-# Cachepathlib
-mem = joblib.Memory(cachedir='./cache', verbose=0)
 
 # Classes
 class DatasetType(enum.Enum):
@@ -34,7 +29,6 @@ class Dataset(Dataset):
         self.is_combined_data = is_combined_data
         self.patch_size = patch_size
         self.transform = transform
-        self.load_sample = mem.cache(self.load_sample) # Preventing bug when calling joblib.Memory decorator
 
     @functools.lru_cache(6)
     def preload_image_data(self, data_dir: string):
@@ -85,6 +79,6 @@ class Dataset(Dataset):
             temp_mask = augmentation['mask']
 
         return {
-            'image': torch.as_tensor(temp_img, dtype=torch.float32).contiguous(),
-            'mask': torch.as_tensor(temp_mask, dtype=torch.long).contiguous()
+            'image': torch.as_tensor(temp_img.float()).contiguous(),
+            'mask': torch.as_tensor(temp_mask.long()).contiguous()
         }

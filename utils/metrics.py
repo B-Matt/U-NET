@@ -59,7 +59,7 @@ class SegmentationMetrics(object):
         # shape: (B, H, W) -> (B, C, H, W)
         input_shape = tuple(gt.shape)  # (N, H, W, ...)
         new_shape = (input_shape[0], class_num) + input_shape[1:]
-        one_hot = torch.zeros(new_shape).to(pred.device, dtype=torch.float)
+        one_hot = torch.zeros(new_shape).to(pred.device, dtype=torch.float, non_blocking=True)
         target = one_hot.scatter_(1, gt.unsqueeze(1).long().data, 1.0)
         return target
 
@@ -190,10 +190,10 @@ class BinaryMetrics():
             activated_pred = activation_fn(y_pred)
         elif self.activation == "0-1":
             sigmoid_pred = nn.Sigmoid()(y_pred)
-            activated_pred = (sigmoid_pred > 0.5).float().to(y_pred.device)
+            activated_pred = (sigmoid_pred > 0.5).float().to(y_pred.device, non_blocking=True)
         else:
             raise NotImplementedError("Not a supported activation!")
 
         assert activated_pred.shape[1] == 1, 'Predictions must contain only one channel' \
                                              ' when performing binary segmentation'
-        return self._calculate_overlap_metrics(y_true.to(y_pred.device, dtype=torch.float), activated_pred, self.eps)
+        return self._calculate_overlap_metrics(y_true.to(y_pred.device, dtype=torch.float, non_blocking=True), activated_pred, self.eps)

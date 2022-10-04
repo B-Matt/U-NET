@@ -6,6 +6,7 @@ import os
 
 import pathlib
 import albumentations as A
+import numpy as np
 
 from pathlib import Path
 from albumentations.pytorch import ToTensorV2
@@ -26,12 +27,14 @@ from utils.logging import logging
 log = logging.getLogger(__name__)
 log.setLevel(logging.INFO)
 
+torch.backends.cudnn.benchmark = True
+
 class UnetTraining:
     def __init__(self, net: UNet):
         assert net is not None
         self.model = net.to(DEVICE, non_blocking=True)
         self.search_files = IS_SEARCHING_FILES
-        self.class_weights = torch.tensor([ 1.0, 27497 / 23673, 27497 / 3487 ], dtype=torch.float).to(DEVICE, non_blocking=True)
+        self.class_weights = torch.tensor([ 1.0, 27745 / 23889, 27745 / 3502 ], dtype=torch.float).to(DEVICE, non_blocking=True)
 
         self.batch_size = BATCH_SIZE
         self.num_epochs = NUM_EPOCHS
@@ -47,8 +50,11 @@ class UnetTraining:
         self.get_loaders()
 
         self.device = DEVICE
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.learning_rate, momentum=0.9, weight_decay=0.0005)
-        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=self.learning_rate, pct_start=0.2, steps_per_epoch=len(self.train_dataset) // self.batch_size, epochs=self.num_epochs, anneal_strategy='linear', verbose=False)
+        # self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.learning_rate, momentum=0.9, weight_decay=0.0005)
+        # self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='max', min_lr=1e-8, patience=30, cooldown=30, verbose=True)
+        
+        self.optimizer = torch.optim.AdamW(self.model.parameters())
+        self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=2e-3, steps_per_epoch=len(self.train_loader), epochs=self.num_epochs)
         self.early_stopping = EarlyStopping(patience=30, verbose=True)
         self.class_labels = {0: 'background', 1: 'fire', 2: 'smoke'}
 
@@ -113,10 +119,8 @@ class UnetTraining:
                                    is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
 
         # Get Loaders
-        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers,
-                                       batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
-        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size,
-                                     num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
+        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         if not self.saving_checkpoints:
@@ -180,7 +184,7 @@ class UnetTraining:
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
         #criterion = torch.nn.BCEWithLogitsLoss()
-        criterion = torch.nn.CrossEntropyLoss(weight=self.class_weights, reduction='mean')
+        criterion = torch.nn.CrossEntropyLoss(weight=self.class_weights, reduction='mean').to(device=self.device, non_blocking=True)
         metric_calculator = SegmentationMetrics(activation='softmax')
 
         global_step = 0
@@ -197,7 +201,10 @@ class UnetTraining:
             epoch_loss = []
             progress_bar = tqdm(total=int(len(self.train_dataset)), desc=f'Epoch {epoch + 1}/{self.num_epochs}', unit='img', position=0)
 
-            for batch in self.train_loader:
+            for i, batch in enumerate(self.train_loader):
+                # Zero Grad
+                self.optimizer.zero_grad(set_to_none=True)
+
                 # Get Batch Of Images
                 batch_image = batch['image'].to(self.device, non_blocking=True)
                 batch_mask = batch['mask'].to(self.device, non_blocking=True)
@@ -208,20 +215,17 @@ class UnetTraining:
                     metrics = metric_calculator(batch_mask, masks_pred)
                     loss = criterion(masks_pred, batch_mask)
 
-                # Zero Grad
-                self.optimizer.zero_grad(set_to_none=True)
-
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
-                grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 255)
+                # grad_scaler.unscale_(self.optimizer)
+                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 255)
 
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
+                self.scheduler.step()                
 
                 # Show batch progress to terminal
                 progress_bar.update(batch_image.shape[0])
-                progress_bar.set_postfix(**{'Loss': loss.item()})
                 global_step += 1
 
                 # Calculate training metrics
@@ -235,7 +239,7 @@ class UnetTraining:
                 if eval_step > 0:
                     if global_step % eval_step == 0:
                         val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, wandb_log)
-                        self.scheduler.step()
+                        progress_bar.set_postfix(**{'Loss': torch.mean(torch.tensor(epoch_loss)).item()})
 
                         wandb_log.log({
                             'Learning Rate': self.optimizer.param_groups[0]['lr'],
@@ -260,9 +264,13 @@ class UnetTraining:
                             self.save_checkpoint(epoch, True)
                             last_best_score = val_loss
 
+            # Update Progress Bar
+            mean_loss = torch.mean(torch.tensor(epoch_loss)).item()
+            progress_bar.set_postfix(**{'Loss': mean_loss})
             progress_bar.close()
+
             wandb_log.log({
-                'Loss [training]': torch.mean(torch.tensor(epoch_loss)).item(),
+                'Loss [training]': mean_loss,
                 'Epoch': epoch,
             })
 

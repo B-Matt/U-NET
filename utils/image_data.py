@@ -1,11 +1,14 @@
 import os
 import sys
 import numpy as np
+import time
 
 from PIL import Image
 from pathlib import Path
 from collections import namedtuple
 from skimage.transform import resize
+
+from torchvision.utils import save_image
 
 from utils.logging import logging
 from utils.rgb import rgb2mask
@@ -31,11 +34,9 @@ class ImageData:
 
         if is_searching_dirs == True:
             path = Path(info.image, self._get_file_from_dir(info.image))
-            image = Image.open(path)            
-            self.input_image = np.asarray(image, dtype=np.uint8)
+            self.input_image = Image.open(path)
         else:
-            image = Image.open(info.image)
-            self.input_image = np.asarray(image, dtype=np.uint8)
+            self.input_image = Image.open(info.image)
 
         if not self.is_combined:
             try: 
@@ -45,45 +46,35 @@ class ImageData:
                 sys.exit(1)  
     
         if is_searching_dirs == True:
-            mask = Image.open(Path(info.mask, self._get_file_from_dir(info.mask)))
-            self.input_mask = np.asarray(mask, dtype=np.uint8)
+            self.input_mask = Image.open(Path(info.mask, self._get_file_from_dir(info.mask)))
         else:
-            mask = Image.open(info.mask)
-            self.input_mask = np.asarray(mask, dtype=np.uint8)
+            self.input_mask = Image.open(info.mask)
 
     def _get_file_from_dir(self, dir):
         for topdir, firs, files in os.walk(dir):
             file = sorted(files)[0]
             return file
 
+    def resize_and_pad(self, img, type):
+        old_size = img.size
+        ratio = float(self.patch_size) / max(old_size)        
+        new_size = tuple([int(x * ratio) for x in old_size])
+        img = img.resize(new_size, Image.NEAREST if type == 'mask' else Image.BICUBIC)
+
+        new_img = Image.new("RGB", (self.patch_size, self.patch_size))
+        new_img.paste(img, (((self.patch_size - new_size[0]) // 2), ((self.patch_size - new_size[1]) // 2)))
+        return new_img
+
     def get_full_image(self):
-        img = self.input_image
-        mask = self.input_mask
-        mask = rgb2mask(mask)
+        img = self.resize_and_pad(self.input_image, 'image')
+        mask = self.resize_and_pad(self.input_mask, 'mask')
 
-        # Padding
-        height = self.input_image.shape[0]
-        width = self.input_image.shape[1]
+        mask_ndarray = np.asarray(mask, dtype=np.float32)
+        img_ndarray = np.asarray(img, dtype=np.float32)
+        img_ndarray = img_ndarray / 255
 
-        pad_width = abs(height - width) // 2
-        before = pad_width
-        after = pad_width
-
-        if pad_width % 2 != 0:
-            after = pad_width + 1
-
-        if height > width:
-            img = np.pad(img, pad_width=[(0, 0), (before, after), (0, 0)], mode='constant')
-            mask = np.pad(mask, pad_width=[(0, 0), (before, after)], mode='constant')
-
-        if width > height:
-            img = np.pad(img, pad_width=[(before, after), (0, 0), (0, 0)], mode='constant')
-            mask = np.pad(mask, pad_width=[(before, after), (0, 0)], mode='constant')
-
-        # Resizing
-        img = resize(img, (self.patch_size, self.patch_size))
-        mask = resize(mask, (self.patch_size, self.patch_size))
-        return img.astype('float32'), mask.astype('float32')
+        mask_ndarray = rgb2mask(mask_ndarray)        
+        return img_ndarray, mask_ndarray
 
     def get_patch_image(self):
         """
