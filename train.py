@@ -67,6 +67,7 @@ class UnetTraining:
             [
                 A.LongestMaxSize(max_size=self.patch_size, interpolation=1),
                 A.PadIfNeeded(min_height=self.patch_size, min_width=self.patch_size, border_mode=0, value=(0,0,0), p=1.0),
+                A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=0.8),
 
                 A.Rotate(limit=(0, 10), p=0.5),
                 A.HorizontalFlip(p=0.5),
@@ -80,7 +81,7 @@ class UnetTraining:
                     A.MotionBlur(p=0.5),
                     A.Sharpen(p=0.2),
                 ], p=0.85),
-                A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=0.8),
+                
                 ToTensorV2(),
             ]
         )
@@ -89,6 +90,7 @@ class UnetTraining:
             [
                 A.LongestMaxSize(max_size=self.patch_size, interpolation=1),
                 A.PadIfNeeded(min_height=self.patch_size, min_width=self.patch_size, border_mode=0, value=(0,0,0), p=1.0),
+
                 ToTensorV2(),
             ],
         )
@@ -122,8 +124,8 @@ class UnetTraining:
         train_sampler = RandomSampler(self.train_dataset)
         val_sampler = SequentialSampler(self.val_dataset)
     
-        self.train_loader = DataLoader(self.train_dataset, sampler=train_sampler, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=False)
-        self.val_loader = DataLoader(self.val_dataset, sampler=val_sampler, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
+        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, sampler=train_sampler, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=False)
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, sampler=val_sampler, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         if not self.saving_checkpoints:
