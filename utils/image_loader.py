@@ -1,13 +1,10 @@
 import enum
-from operator import index
-import random
 import functools
 import string
 import pathlib
+
+from typing import List
 from os.path import splitext
-from typing import Any, List
-import torch
-from torch.utils.data import Dataset
 
 from utils.image_data import ImageData, data_info_tuple
 
@@ -17,18 +14,18 @@ class DatasetType(enum.Enum):
     VALIDATION = 'validation_dataset'
     TEST = 'test_dataset'
 
-class Dataset(Dataset):
-    def __init__(self, data_dir: string, img_dir: string, images: List = None, type: DatasetType = DatasetType.TRAIN, is_combined_data: bool = True, patch_size: int = 128, transform = None) -> None:
+class ImageDataLoader():
+    def __init__(self, data_dir: string, img_dir: string, images: List = None, type: DatasetType = DatasetType.TRAIN, is_combined_data: bool = True, patch_size: int = 128):
         self.all_imgs = images
         self.is_searching_dirs = images == None and img_dir != None
-        self.is_combined_data = is_combined_data
-        self.patch_size = patch_size
-        self.transform = transform
 
         if self.is_searching_dirs:
             self.images_data = self.preload_image_data_dir(data_dir, img_dir, type)
         else:
-            self.images_data = self.preload_image_data(data_dir)       
+            self.images_data = self.preload_image_data(data_dir)
+
+        self.is_combined_data = is_combined_data
+        self.patch_size = patch_size
 
     @functools.lru_cache(6)
     def preload_image_data(self, data_dir: string):
@@ -63,19 +60,12 @@ class Dataset(Dataset):
         img, mask = image_data.get_sample()
         return img, mask
 
-    def __len__(self):
-        return len(self.images_data)
+    def get_data(self):
+        imgs = []
+        masks = []
+        for data in self.images_data:
+            sample = self.load_sample(data)
+            imgs.append(sample[0])
+            masks.append(sample[1])
 
-    def __getitem__(self, index: Any):
-        image_data_tuple = self.images_data[index]
-        img, mask = self.load_sample(image_data_tuple)
-
-        if self.transform is not None:
-            augmentation = self.transform(image=img, mask=mask)
-            temp_img = augmentation['image']
-            temp_mask = augmentation['mask']
-
-        return {
-            'image': torch.as_tensor(temp_img.float()),
-            'mask': torch.as_tensor(temp_mask.long())
-        }
+        return imgs, masks

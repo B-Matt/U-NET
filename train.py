@@ -6,12 +6,11 @@ import os
 
 import pathlib
 import albumentations as A
-import numpy as np
 
+from tqdm import tqdm
 from pathlib import Path
 from albumentations.pytorch import ToTensorV2
-from torch.utils.data import DataLoader
-from tqdm import tqdm
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
 from settings import *
 from evaluate import evaluate
@@ -50,13 +49,14 @@ class UnetTraining:
         self.get_loaders()
 
         self.device = DEVICE
+        self.start_epoch = 0
         # self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.learning_rate, momentum=0.9, weight_decay=0.0005)
         # self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=self.optimizer, mode='max', min_lr=1e-8, patience=30, cooldown=30, verbose=True)
         
-        self.optimizer = torch.optim.AdamW(self.model.parameters())
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), weight_decay=WEIGHT_DECAY, eps=ADAM_EPSILON)
         self.scheduler = torch.optim.lr_scheduler.OneCycleLR(self.optimizer, max_lr=2e-3, steps_per_epoch=len(self.train_loader), epochs=self.num_epochs)
         self.early_stopping = EarlyStopping(patience=30, verbose=True)
-        self.class_labels = {0: 'background', 1: 'fire', 2: 'smoke'}
+        self.class_labels = { 0: 'background', 1: 'fire', 2: 'smoke' }
 
         if LOAD_MODEL:
             self.load_checkpoint(Path('checkpoints'))
@@ -65,25 +65,30 @@ class UnetTraining:
     def get_augmentations(self):
         self.train_transforms = A.Compose(
             [
+                A.LongestMaxSize(max_size=self.patch_size, interpolation=1),
+                A.PadIfNeeded(min_height=self.patch_size, min_width=self.patch_size, border_mode=0, value=(0,0,0), p=1.0),
+
                 A.Rotate(limit=(0, 10), p=0.5),
                 A.HorizontalFlip(p=0.5),
                 A.OneOf([
                     A.ElasticTransform(p=0.3),
                     A.GridDistortion(p=0.4),
-                    A.OpticalDistortion(distort_limit=1, shift_limit=0.2, p=0.3),
+                    A.OpticalDistortion(distort_limit=0.5, shift_limit=0.2, p=0.3),
                 ], p=0.8),
-                A.RandomBrightnessContrast(p=0.8),
                 A.OneOf([
                     A.Blur(p=0.3),
                     A.MotionBlur(p=0.5),
                     A.Sharpen(p=0.2),
-                ], p=0.8),
+                ], p=0.85),
+                A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.5), p=0.8),
                 ToTensorV2(),
             ]
         )
 
         self.val_transforms = A.Compose(
             [
+                A.LongestMaxSize(max_size=self.patch_size, interpolation=1),
+                A.PadIfNeeded(min_height=self.patch_size, min_width=self.patch_size, border_mode=0, value=(0,0,0), p=1.0),
                 ToTensorV2(),
             ],
         )
@@ -99,28 +104,26 @@ class UnetTraining:
             n_dataset = int(round(val_percent * len(all_imgs)))
 
             # Load train & validation datasets
-            self.train_dataset = Dataset(data_dir='data', images=all_imgs[:n_dataset], type=DatasetType.TRAIN,
-                                         is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
-            self.train_dataset.shuffle()
-            self.val_dataset = Dataset(data_dir='data', images=all_imgs[n_dataset:], type=DatasetType.VALIDATION,
-                                       is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
+            self.train_dataset = Dataset(data_dir='data', images=all_imgs[:n_dataset], type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
+            self.val_dataset = Dataset(data_dir='data', images=all_imgs[n_dataset:], type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
 
             # Get Loaders
-            self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers,
-                                           batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
-            self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size,
-                                         num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
+            train_sampler = RandomSampler(self.train_dataset)
+            val_sampler = SequentialSampler(self.val_dataset)
+
+            self.train_loader = DataLoader(self.train_dataset, sampler=train_sampler, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=False)
+            self.val_loader = DataLoader(self.val_dataset, sampler=val_sampler, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
             return
 
-        self.train_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.TRAIN,
-                                     is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
-        self.train_dataset.shuffle()
-        self.val_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.VALIDATION,
-                                   is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
+        self.train_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
+        self.val_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
 
         # Get Loaders
-        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
-        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
+        train_sampler = RandomSampler(self.train_dataset)
+        val_sampler = SequentialSampler(self.val_dataset)
+    
+        self.train_loader = DataLoader(self.train_dataset, sampler=train_sampler, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=False)
+        self.val_loader = DataLoader(self.val_dataset, sampler=val_sampler, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         if not self.saving_checkpoints:
@@ -158,6 +161,7 @@ class UnetTraining:
             return
 
         state_dict = torch.load(path)
+        self.start_epoch = state_dict['epoch']
         self.model.load_state_dict(state_dict['model_state'])
         self.optimizer.load_state_dict(state_dict['optimizer_state'])
         self.optimizer.name = state_dict['optimizer_name']
@@ -179,8 +183,18 @@ class UnetTraining:
 
         wandb_log = wandb.init(project='firebot-unet',
                                resume='allow', entity='firebot031')
-        wandb_log.config.update(dict(epochs=self.num_epochs, batch_size=self.batch_size, learning_rate=self.learning_rate,
-                                save_checkpoint=self.saving_checkpoints, patch_size=self.patch_size, amp=self.using_amp))
+        wandb_log.config.update(
+            dict(
+                epochs=self.num_epochs,
+                batch_size=self.batch_size,
+                learning_rate=self.learning_rate,
+                save_checkpoint=self.saving_checkpoints,
+                patch_size=self.patch_size,
+                amp=self.using_amp,
+                weight_decay=WEIGHT_DECAY,
+                adam_epsilon=ADAM_EPSILON,
+            )
+        )
 
         grad_scaler = torch.cuda.amp.GradScaler(enabled=self.using_amp)
         #criterion = torch.nn.BCEWithLogitsLoss()
@@ -195,7 +209,9 @@ class UnetTraining:
         jaccard_index = 0.0
 
         torch.cuda.empty_cache()
-        for epoch in range(self.num_epochs):
+        self.optimizer.zero_grad(set_to_none=True)
+
+        for epoch in range(self.start_epoch, self.num_epochs):
             self.model.train()
 
             epoch_loss = []
@@ -217,8 +233,8 @@ class UnetTraining:
 
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
-                # grad_scaler.unscale_(self.optimizer)
-                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 255)
+                grad_scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
@@ -236,33 +252,33 @@ class UnetTraining:
 
                 # Evaluation of training
                 eval_step = (int(len(self.train_dataset)) // (self.valid_eval_step * self.batch_size))
-                if eval_step > 0:
-                    if global_step % eval_step == 0:
-                        val_loss = evaluate(self.model, self.val_loader, self.device, self.class_labels, wandb_log)
-                        progress_bar.set_postfix(**{'Loss': torch.mean(torch.tensor(epoch_loss)).item()})
+                if eval_step > 0 and global_step % eval_step == 0:
+                    val_loss = evaluate(self.model, self.val_loader, self.device, wandb_log)
+                    progress_bar.set_postfix(**{'Loss': torch.mean(torch.tensor(epoch_loss)).item()})
 
-                        wandb_log.log({
-                            'Learning Rate': self.optimizer.param_groups[0]['lr'],
-                            'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
-                                'ground_truth': {
-                                    'mask_data': batch_mask[0].cpu().numpy(),
-                                    'class_labels': self.class_labels
-                                },
-                                'prediction': {
-                                    'mask_data': masks_pred.argmax(dim=1)[0].cpu().numpy(),
-                                    'class_labels': self.class_labels
-                                }
+                    wandb_log.log({
+                        'Learning Rate': self.optimizer.param_groups[0]['lr'],
+                        'Images [training]': wandb.Image(batch_image[0].cpu(), masks={
+                            'ground_truth': {
+                                'mask_data': batch_mask[0].cpu().numpy(),
+                                'class_labels': self.class_labels
+                            },
+                            'prediction': {
+                                'mask_data': masks_pred.argmax(dim=1)[0].cpu().numpy(),
+                                'class_labels': self.class_labels
                             }
-                            ),
-                            'Epoch': epoch,
-                            'Pixel Accuracy [training]': metrics['pixel_acc'].item(),
-                            'IoU Score [training]': metrics['jaccard_index'].item(),
-                            'Dice Score [training]': metrics['dice_score'].item(),
-                        })
+                        }
+                        ),
+                        'Epoch': epoch,
+                        'Pixel Accuracy [training]': metrics['pixel_acc'].item(),
+                        'IoU Score [training]': metrics['jaccard_index'].item(),
+                        'Dice Score [training]': metrics['dice_score'].item(),
+                        **histograms
+                    })
 
-                        if val_loss < last_best_score:
-                            self.save_checkpoint(epoch, True)
-                            last_best_score = val_loss
+                    if val_loss < last_best_score:
+                        self.save_checkpoint(epoch, True)
+                        last_best_score = val_loss
 
             # Update Progress Bar
             mean_loss = torch.mean(torch.tensor(epoch_loss)).item()

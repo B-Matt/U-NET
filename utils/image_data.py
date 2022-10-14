@@ -1,14 +1,12 @@
 import os
 import sys
 import numpy as np
-import time
+import albumentations.augmentations.functional as F
 
 from PIL import Image
 from pathlib import Path
 from collections import namedtuple
 from skimage.transform import resize
-
-from torchvision.utils import save_image
 
 from utils.logging import logging
 from utils.rgb import rgb2mask
@@ -66,12 +64,12 @@ class ImageData:
         return new_img
 
     def get_full_image(self):
-        img = self.resize_and_pad(self.input_image, 'image')
-        mask = self.resize_and_pad(self.input_mask, 'mask')
+        #img = self.resize_and_pad(self.input_image, 'image')
+        #mask = self.resize_and_pad(self.input_mask, 'mask')
 
-        mask_ndarray = np.asarray(mask, dtype=np.float32)
-        img_ndarray = np.asarray(img, dtype=np.float32)
-        img_ndarray = img_ndarray / 255
+        img_ndarray = np.asarray(self.input_image, dtype=np.uint8)
+        mask_ndarray = np.asarray(self.input_mask, dtype=np.uint8)
+        #img_ndarray = img_ndarray / 255
 
         mask_ndarray = rgb2mask(mask_ndarray)        
         return img_ndarray, mask_ndarray

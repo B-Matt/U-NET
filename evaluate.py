@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from utils.metrics import SegmentationMetrics
 
-def evaluate(net, dataloader, device, class_labels, training):
+def evaluate(net, dataloader, device, training):
     net.eval()
     num_val_batches = len(dataloader)
 
