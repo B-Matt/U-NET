@@ -1,8 +1,5 @@
 import torch
-import wandb
-
 import numpy as np
-import torch.nn.functional as F
 
 from tqdm import tqdm
 from utils.metrics import SegmentationMetrics
@@ -34,6 +31,7 @@ def evaluate(net, dataloader, device, training):
             dice_score.append(metrics['dice_score'])
 
             loss = criterion(mask_pred, mask_true)
+
             global_loss.append(loss.cpu())
    
     net.train()

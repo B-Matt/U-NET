@@ -310,7 +310,7 @@ if __name__ == '__main__':
     training = UnetTraining(net)
 
     try:
-        training.train()        
+        training.train()
     except KeyboardInterrupt:
         try:
             sys.exit(0)
