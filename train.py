@@ -16,7 +16,7 @@ from settings import *
 from evaluate import evaluate
 from unet.model import UNet
 
-from utils.dataset import Dataset, DatasetType
+from utils.dataset import Dataset, DatasetCacheType, DatasetType
 from utils.early_stopping import EarlyStopping
 from utils.metrics import SegmentationMetrics
 
@@ -117,15 +117,15 @@ class UnetTraining:
             self.val_loader = DataLoader(self.val_dataset, sampler=val_sampler, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
             return
 
-        self.train_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
-        self.val_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
+        self.train_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', cache_type=DatasetCacheType.NONE, type=DatasetType.TRAIN, is_combined_data=True, patch_size=self.patch_size, transform=self.train_transforms)
+        self.val_dataset = Dataset(data_dir=r'data', img_dir=r'imgs', cache_type=DatasetCacheType.NONE, type=DatasetType.VALIDATION, is_combined_data=True, patch_size=self.patch_size, transform=self.val_transforms)
 
         # Get Loaders
-        train_sampler = RandomSampler(self.train_dataset)
-        val_sampler = SequentialSampler(self.val_dataset)
+        # train_sampler = RandomSampler(self.train_dataset)
+        # val_sampler = SequentialSampler(self.val_dataset)
     
-        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, sampler=train_sampler, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=False)
-        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, sampler=val_sampler, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
+        self.train_loader = DataLoader(self.train_dataset, num_workers=self.num_workers, batch_size=self.batch_size, pin_memory=self.pin_memory, shuffle=True)
+        self.val_loader = DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=self.num_workers, pin_memory=self.pin_memory, shuffle=False)
 
     def save_checkpoint(self, epoch: int, is_best: bool = False):
         if not self.saving_checkpoints:
@@ -275,7 +275,6 @@ class UnetTraining:
                         'Pixel Accuracy [training]': metrics['pixel_acc'].item(),
                         'IoU Score [training]': metrics['jaccard_index'].item(),
                         'Dice Score [training]': metrics['dice_score'].item(),
-                        **histograms
                     })
 
                     if val_loss < last_best_score:
