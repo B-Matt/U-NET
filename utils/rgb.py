@@ -14,8 +14,6 @@ def rgb2mask(rgb):
 
 def mask2rgb(mask):
     rgb = np.zeros(mask.shape+(3,), dtype=np.uint8)
-    print(np.unique(mask))
     for i in np.unique(mask):
-        print(LABEL_COLORS[i])
         rgb[mask==i] = LABEL_COLORS[i]
     return rgb

@@ -39,7 +39,7 @@ def predict_img(net, full_img, device, out_threshold=0.5):
     if net.n_classes == 1:
         return (probs > out_threshold).numpy()
     else:
-        return F.one_hot(probs.argmax(dim=1)[0], net.n_classes).permute(2, 0, 1).numpy()
+        return F.one_hot(probs.argmax(dim=1)[0], net.n_classes).numpy()
 
 def get_output_filenames(args):
     def _generate_name(fn):
