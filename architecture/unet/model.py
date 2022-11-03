@@ -32,15 +32,4 @@ class UNet(nn.Module):
         x = self.up_conv_4(x, x1)
 
         logits = self.out_conv(x)
-        return logits #torch.sigmoid(logits)
-
-def test():
-    x = torch.randn((3, 1, 160, 160))
-    model = UNet(1, 1, False)
-    preds = model(x)
-
-    print(preds.shape, x.shape)
-    assert preds.shape == x.shape
-
-if __name__ == "__main__":
-    test()
+        return logits

@@ -8,7 +8,7 @@ import logging
 import numpy as np
 import torch.nn.functional as F
 
-from unet.model import UNet
+from architecture.model import UNet
 from utils.rgb import mask2rgb
 from utils.dataset import Dataset
 from utils.plots import plot_img_and_mask

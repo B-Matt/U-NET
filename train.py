@@ -14,7 +14,8 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
 from settings import *
 from evaluate import evaluate
-from unet.model import UNet
+#from architecture.unet.model import UNet
+from architecture.unet_plusplus.model import UNetPlusPlus
 
 from utils.dataset import Dataset, DatasetCacheType, DatasetType
 from utils.early_stopping import EarlyStopping
@@ -29,7 +30,7 @@ log.setLevel(logging.INFO)
 torch.backends.cudnn.benchmark = True
 
 class UnetTraining:
-    def __init__(self, net: UNet):
+    def __init__(self, net: UNetPlusPlus):
         assert net is not None
         self.model = net.to(DEVICE, non_blocking=True)
         self.search_files = IS_SEARCHING_FILES
@@ -236,7 +237,7 @@ class UnetTraining:
                 # Scale Gradients
                 grad_scaler.scale(loss).backward()
                 grad_scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 15)
 
                 grad_scaler.step(self.optimizer)
                 grad_scaler.update()
@@ -306,7 +307,7 @@ class UnetTraining:
         wandb_log.finish()
 
 if __name__ == '__main__':
-    net = UNet(n_channels=3, n_classes=NUM_CLASSES)
+    net = UNetPlusPlus(n_channels=3, n_classes=NUM_CLASSES, deep_supervision=False)
     training = UnetTraining(net)
 
     try:
